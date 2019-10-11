@@ -5,12 +5,6 @@ local ev = require 'common.event'
 
 local varPool = {}
 
-local VAR_LOCAL = 0xFFFF
-local VAR_VARARG = 0xFFFE
-local VAR_UPVALUE = 0xFFFD
-local VAR_GLOBAL = 0xFFFC
-local VAR_STANDARD = 0xFFFB
-
 local MAX_TABLE_FIELD = 300
 
 local TEMPORARY = "(temporary)"
@@ -89,7 +83,9 @@ ev.on('initializing', function()
 end)
 
 
-local function hasLocal(frameId)
+local special_has = {}
+
+function special_has.Locals(frameId)
     local i = 1
     while true do
         local name = rdebug.getlocalv(frameId, i)
@@ -103,16 +99,22 @@ local function hasLocal(frameId)
     end
 end
 
-local function hasVararg(frameId)
+function special_has.Varargs(frameId)
     return rdebug.getlocalv(frameId, -1) ~= nil
 end
 
-local function hasUpvalue(frameId)
+function special_has.Upvalues(frameId)
     local f = rdebug.getfunc(frameId)
     return rdebug.getupvaluev(f, 1) ~= nil
 end
 
-local function hasGlobal()
+function special_has.Returns(frameId)
+    local info = {}
+    rdebug.getinfo(frameId, "r", info)
+    return info.ftransfer > 0 and info.ntransfer > 0
+end
+
+function special_has.Globals()
     local gt = rdebug._G
     local key
     while true do
@@ -126,7 +128,7 @@ local function hasGlobal()
     end
 end
 
-local function hasStandard()
+function special_has.Standard()
     return true
 end
 
@@ -438,14 +440,22 @@ local function varCreateReference(frameId, value, evaluateName, context)
     return textValue, textType
 end
 
-local function varCreateSpecialReference(frameId, special)
+local function varCreateScopes(frameId, scopes, name, expensive)
+    if not special_has[name](frameId) then
+        return
+    end
     varPool[#varPool + 1] = {
         v = {},
-        special = special,
+        special = name,
         frameId = frameId,
     }
-    return #varPool
+    scopes[#scopes + 1] = {
+        name = name,
+        variablesReference = #varPool,
+        expensive = expensive,
+    }
 end
+
 
 local function varCreateObject(frameId, name, value, evaluateName)
     local text, type, ref = varCreateReference(frameId, value, evaluateName, "getvalue")
@@ -649,9 +659,9 @@ local function setValue(varRef, name, value)
     }
 end
 
-local extand = {}
+local special_extand = {}
 
-extand[VAR_LOCAL] = function(varRef)
+function special_extand.Locals(varRef)
     varRef[3] = {}
     local frameId = varRef.frameId
     local tempVar = {}
@@ -675,29 +685,10 @@ extand[VAR_LOCAL] = function(varRef)
         end
         i = i + 1
     end
-
-    if LUAVERSION >= 54 then
-        local info = {}
-        rdebug.getinfo(frameId, "r", info)
-        if info.ftransfer > 0 and info.ntransfer > 0 then
-            for i = info.ftransfer, info.ftransfer + info.ntransfer do
-                local name, value = rdebug.getlocalv(frameId, i)
-                if name ~= nil then
-                    name = ("(return #%d)"):format(i - info.ftransfer + 1)
-                    local fi = i
-                    varCreate(vars, frameId, varRef, name, value
-                        , name
-                        , function() local _, r = rdebug.getlocal(frameId, fi) return r end
-                    )
-                end
-            end
-        end
-    end
-
     return vars
 end
 
-extand[VAR_VARARG] = function(varRef)
+function special_extand.Varargs(varRef)
     varRef[3] = {}
     local frameId = varRef.frameId
     local vars = {}
@@ -717,7 +708,7 @@ extand[VAR_VARARG] = function(varRef)
     return vars
 end
 
-extand[VAR_UPVALUE] = function(varRef)
+function special_extand.Upvalues(varRef)
     varRef[3] = {}
     local frameId = varRef.frameId
     local vars = {}
@@ -738,7 +729,30 @@ extand[VAR_UPVALUE] = function(varRef)
     return vars
 end
 
-extand[VAR_GLOBAL] = function(varRef)
+function special_extand.Returns(varRef)
+    varRef[3] = {}
+    local frameId = varRef.frameId
+    local vars = {}
+    if LUAVERSION >= 54 then
+        local info = {}
+        rdebug.getinfo(frameId, "r", info)
+        if info.ftransfer > 0 and info.ntransfer > 0 then
+            for i = info.ftransfer, info.ftransfer + info.ntransfer - 1 do
+                local name, value = rdebug.getlocalv(frameId, i)
+                if name ~= nil then
+                    local fi = i
+                    varCreate(vars, frameId, varRef, ('[%d]'):format(i - info.ftransfer + 1), value
+                        , name
+                        , function() local _, r = rdebug.getlocal(frameId, fi) return r end
+                    )
+                end
+            end
+        end
+    end
+    return vars
+end
+
+function special_extand.Globals(varRef)
     varRef[3] = {}
     local frameId = varRef.frameId
     local vars = {}
@@ -756,7 +770,7 @@ extand[VAR_GLOBAL] = function(varRef)
     return vars
 end
 
-extand[VAR_STANDARD] = function(varRef)
+function special_extand.Standard(varRef)
     varRef[3] = {}
     local frameId = varRef.frameId
     local vars = {}
@@ -778,41 +792,14 @@ local m = {}
 
 function m.scopes(frameId)
     local scopes = {}
-    if hasLocal(frameId) then
-        scopes[#scopes + 1] = {
-            name = "Locals",
-            variablesReference = varCreateSpecialReference(frameId, VAR_LOCAL),
-            expensive = false,
-        }
+    varCreateScopes(frameId, scopes, "Locals", false)
+    varCreateScopes(frameId, scopes, "Varargs", false)
+    varCreateScopes(frameId, scopes, "Upvalues", false)
+    if LUAVERSION >= 54 then
+        varCreateScopes(frameId, scopes, "Returns", false)
     end
-    if hasVararg(frameId) then
-        scopes[#scopes + 1] = {
-            name = "Varargs",
-            variablesReference = varCreateSpecialReference(frameId, VAR_VARARG),
-            expensive = false,
-        }
-    end
-    if hasUpvalue(frameId) then
-        scopes[#scopes + 1] = {
-            name = "Upvalues",
-            variablesReference = varCreateSpecialReference(frameId, VAR_UPVALUE),
-            expensive = false,
-        }
-    end
-    if hasGlobal() then
-        scopes[#scopes + 1] = {
-            name = "Globals",
-            variablesReference = varCreateSpecialReference(frameId, VAR_GLOBAL),
-            expensive = true,
-        }
-    end
-    if hasStandard() then
-        scopes[#scopes + 1] = {
-            name = "Standard",
-            variablesReference = varCreateSpecialReference(frameId, VAR_STANDARD),
-            expensive = true,
-        }
-    end
+    varCreateScopes(frameId, scopes, "Globals", true)
+    varCreateScopes(frameId, scopes, "Standard", true)
     return scopes
 end
 
@@ -822,7 +809,7 @@ function m.extand(valueId)
         return nil, 'Error variablesReference'
     end
     if varRef.special then
-        return extand[varRef.special](varRef)
+        return special_extand[varRef.special](varRef)
     end
     return extandValue(varRef)
 end
