@@ -252,7 +252,7 @@ function CMD.setVariable(pkg)
 end
 
 function CMD.evaluate(pkg)
-    local ok, result, ref = evaluate.run(pkg.frameId, pkg.expression, pkg.context)
+    local ok, result = evaluate.run(pkg.frameId, pkg.expression, pkg.context)
     if not ok then
         sendToMaster {
             cmd = 'evaluate',
@@ -263,13 +263,14 @@ function CMD.evaluate(pkg)
         }
         return
     end
+    result.result = result.value
+    result.value = nil
     sendToMaster {
         cmd = 'evaluate',
         command = pkg.command,
         seq = pkg.seq,
         success = true,
-        result = result,
-        variablesReference = ref,
+        body = result
     }
 end
 
@@ -277,7 +278,11 @@ function CMD.setBreakpoints(pkg)
     if noDebug or not source.valid(pkg.source) then
         return
     end
-    breakpoint.update(pkg.source, pkg.breakpoints, pkg.content)
+    breakpoint.set_bp(pkg.source, pkg.breakpoints, pkg.content)
+end
+
+function CMD.setFunctionBreakpoints(pkg)
+    breakpoint.set_funcbp(pkg.breakpoints)
 end
 
 function CMD.setExceptionBreakpoints(pkg)
@@ -380,6 +385,14 @@ function hook.bp(line)
             runLoop 'breakpoint'
             return
         end
+    end
+end
+
+function hook.funcbp(func)
+    if not initialized then return end
+    if breakpoint.hit_funcbp(func) then
+        state = 'stopped'
+        runLoop 'function breakpoint'
     end
 end
 

@@ -1,15 +1,16 @@
 return {
     supportsConfigurationDoneRequest = true,
-    supportsSetVariable = true,
+    supportsFunctionBreakpoints = true,
     supportsConditionalBreakpoints = true,
     supportsHitConditionalBreakpoints = true,
-    supportsDelayedStackTraceLoading = true,
-    supportsExceptionInfoRequest = true,
-    supportsLogPoints = true,
     supportsEvaluateForHovers = true,
-    supportsLoadedSourcesRequest = true,
-    supportsTerminateRequest = true,
+    supportsSetVariable = true,
     supportsRestartRequest = true,
+    supportsExceptionInfoRequest = true,
+    supportsDelayedStackTraceLoading = true,
+    supportsLoadedSourcesRequest = true,
+    supportsLogPoints = true,
+    supportsTerminateRequest = true,
     exceptionBreakpointFilters = {
         {
             default = false,
