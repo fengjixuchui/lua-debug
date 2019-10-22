@@ -55,17 +55,16 @@ local function init_standard()
         table.insert(lstandard, "newproxy")
         table.insert(lstandard, "setfenv")
         table.insert(lstandard, "unpack")
-    end
-    if LUAVERSION >= 52 then
+    elseif LUAVERSION == 52 then
         table.insert(lstandard, "rawlen")
-    end
-    if LUAVERSION == 52 or LUAVERSION == 53 then
         table.insert(lstandard, "bit32")
-    end
-    if LUAVERSION >= 53 then
+    elseif LUAVERSION == 53 then
+        table.insert(lstandard, "rawlen")
+        table.insert(lstandard, "bit32")
         table.insert(lstandard, "utf8")
-    end
-    if LUAVERSION >= 54 then
+    elseif LUAVERSION >= 54 then
+        table.insert(lstandard, "rawlen")
+        table.insert(lstandard, "utf8")
         table.insert(lstandard, "warn")
     end
     standard = {}
@@ -533,14 +532,16 @@ local function extandTableIndexed(varRef, start, count)
     local t = varRef.v
     local evaluateName = varRef.eval
     local vars = {}
+    local last = start + count - 1
     if start <= 0 then
         start = 1
     end
-    for key = start, start + count do
+    for key = start, last do
         local value = rdebug.indexv(t, key)
         if value ~= nil then
+            local name = (key > 0 and key < 1000) and ('[%03d]'):format(key) or ('%d'):format(key)
             varCreate(vars, varRef, nil
-                , ('%d'):format(key), nil
+                , name, nil
                 , value, evaluateName and ('%s[%d]'):format(evaluateName, key)
                 , function() return rdebug.index(t, key) end
             )
@@ -888,7 +889,7 @@ end
 
 function m.set(valueId, name, value)
     local varRef = varPool[valueId]
-    if not varRef then
+    if not varRef or varRef.special then
         return nil, 'Error variablesReference'
     end
     return setValue(varRef, name, value)
