@@ -860,7 +860,7 @@ end
 
 function m.set(valueId, name, value)
     local varRef = varPool[valueId]
-    if not varRef or varRef.special then
+    if not varRef then
         return nil, 'Error variablesReference'
     end
     return setValue(varRef, name, value)
@@ -868,6 +868,7 @@ end
 
 function m.clean()
     varPool = {}
+    rdebug.cleanwatch()
 end
 
 function m.createText(value, context)
