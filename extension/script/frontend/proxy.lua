@@ -11,24 +11,11 @@ local startReq
 local restart = false
 local m = {}
 
-local function getVersion(dir)
-    local json = require 'common.json'
-    local package = json.decode(assert(io.open((dir / 'package.json'):string()):read 'a'))
-    return package.version
-end
-
-local function getHomePath()
-    if platformOS() == "Windows" then
-        return os.getenv 'USERPROFILE'
-    end
-    return os.getenv 'HOME'
-end
-
 local function getDbgPath()
     if WORKDIR:filename():string() ~= 'extension' then
         return WORKDIR
     end
-    return fs.path(getHomePath()) / (VSCODE or '.vscode') / 'extensions' / ('actboy168.lua-debug-' .. getVersion(WORKDIR))
+    return arg[2]
 end
 
 local function getUnixAddress(pid)
