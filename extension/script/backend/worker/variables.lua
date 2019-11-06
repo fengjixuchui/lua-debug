@@ -158,7 +158,7 @@ end
 local function varCanExtand(type, value)
     if type == 'function' then
         return rdebug.getupvaluev(value, 1) ~= nil
-    elseif type == 'cfunction' then
+    elseif type == 'c function' then
         return rdebug.getupvaluev(value, 1) ~= nil
     elseif type == 'table' then
         if rdebug.nextkey(value, nil) ~= nil then
@@ -387,7 +387,7 @@ local function varGetValue(context, type, value)
             end
             local name = rdebug.fieldv(meta, '__name')
             if name ~= nil then
-                return 'userdata: ' .. tostring(rdebug.value(name))
+                return tostring(rdebug.value(name))
             end
         end
         return 'userdata'
