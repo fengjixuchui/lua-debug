@@ -2,9 +2,9 @@
 #include "rdebug_table.h"
 #include <string.h>
 #include <stdio.h>
+#include <limits>
 
-static int DEBUG_WATCH = 0;
-static int DEBUG_WATCH_FUNC = 0;
+static int DEBUG_REFFUNC = 0;
 
 lua_State* get_host(rlua_State *L);
 
@@ -58,8 +58,9 @@ client_index(rlua_State *L, int getref) {
 	if (rlua_gettop(L) != 2) {
 		return rluaL_error(L, "need table key");
 	}
-	if (rlua_type(L, 2) != LUA_TSTRING && !rlua_isinteger(L, 2)) {
-		rluaL_typeerror(L, 2, "string or integer");
+	rlua_Integer i = rluaL_checkinteger(L, 2);
+	if (i <= 0 || i > (std::numeric_limits<int>::max)()) {
+		return rluaL_error(L, "must be `unsigned int`");
 	}
 	if (get_index(L, hL, getref)) {
 		return 1;
@@ -75,6 +76,29 @@ lclient_index(rlua_State *L) {
 static int
 lclient_indexv(rlua_State *L) {
 	return client_index(L, 0);
+}
+
+static int
+client_field(rlua_State *L, int getref) {
+	lua_State *hL = get_host(L);
+	if (rlua_gettop(L) != 2) {
+		return rluaL_error(L, "need table key");
+	}
+	rluaL_checktype(L, 2, LUA_TSTRING);
+	if (get_field(L, hL, getref)) {
+		return 1;
+	}
+	return 0;
+}
+
+static int
+lclient_field(rlua_State *L) {
+	return client_field(L, 1);
+}
+
+static int
+lclient_fieldv(rlua_State *L) {
+	return client_field(L, 0);
 }
 
 static int
@@ -133,9 +157,9 @@ lclient_copytable(rlua_State *L) {
 				lua_pop(hL, 3);
 				return 1;
 			}
-			rlua_pushvalue(L, 1); combine_kv(L, hL, 0, VAR_INDEX_KEY, i);
+			combine_kv(L, hL, 1, 0, VAR::INDEX_KEY, i);
 			// TODO: 如果value使用getref==0，可以提高效率，但是getref==1仍然是需要的
-			rlua_pushvalue(L, 1); combine_kv(L, hL, 1, VAR_INDEX_VAL, i);
+			combine_kv(L, hL, 1, 1, VAR::INDEX_VAL, i);
 			rlua_rawset(L, -3);
 		}
 	}
@@ -204,7 +228,6 @@ lclient_assign(rlua_State *L) {
 	}
 	rluaL_checktype(L, 1, LUA_TUSERDATA);
 	struct value * ref = (struct value *)rlua_touserdata(L, 1);
-	rlua_getuservalue(L, 1);
 	int r = assign_value(L, ref, hL);
 	rlua_pushboolean(L, r);
 	return 1;
@@ -433,11 +456,11 @@ lclient_reffunc(rlua_State *L) {
 	size_t len = 0;
 	const char* func = rluaL_checklstring(L, 1, &len);
 	lua_State* hL = get_host(L);
-	if (lua::rawgetp(hL, LUA_REGISTRYINDEX, &DEBUG_WATCH_FUNC) == LUA_TNIL) {
+	if (lua::rawgetp(hL, LUA_REGISTRYINDEX, &DEBUG_REFFUNC) == LUA_TNIL) {
 		lua_pop(hL, 1);
 		lua_newtable(hL);
 		lua_pushvalue(hL, -1);
-		lua_rawsetp(hL, LUA_REGISTRYINDEX, &DEBUG_WATCH_FUNC);
+		lua_rawsetp(hL, LUA_REGISTRYINDEX, &DEBUG_REFFUNC);
 	}
 	if (luaL_loadbuffer(hL, func, len, "=")) {
 		rlua_pushnil(L);
@@ -452,7 +475,7 @@ lclient_reffunc(rlua_State *L) {
 
 static int
 getreffunc(lua_State *hL, lua_Integer func) {
-	if (lua::rawgetp(hL, LUA_REGISTRYINDEX, &DEBUG_WATCH_FUNC) != LUA_TTABLE) {
+	if (lua::rawgetp(hL, LUA_REGISTRYINDEX, &DEBUG_REFFUNC) != LUA_TTABLE) {
 		lua_pop(hL, 1);
 		return 0;
 	}
@@ -525,11 +548,11 @@ static int
 addwatch(lua_State *hL, int idx) {
 	lua_checkstack(hL, 3);
 	lua_pushvalue(hL, idx);
-	if (lua::rawgetp(hL, LUA_REGISTRYINDEX, &DEBUG_WATCH) == LUA_TNIL) {
+	if (lua::getfield(hL, LUA_REGISTRYINDEX, "__debugger_watch") == LUA_TNIL) {
 		lua_pop(hL, 1);
 		lua_newtable(hL);
 		lua_pushvalue(hL, -1);
-		lua_rawsetp(hL, LUA_REGISTRYINDEX, &DEBUG_WATCH);
+		lua_setfield(hL, LUA_REGISTRYINDEX, "__debugger_watch");
 	}
 	lua_insert(hL, -2);
 	int ref = luaL_ref(hL, -2);
@@ -537,19 +560,15 @@ addwatch(lua_State *hL, int idx) {
 	return ref;
 }
 
-static int
-storewatch(rlua_State *L, lua_State *hL, int idx) {
-	int ref = addwatch(hL, idx);
-	get_registry(L, VAR_REGISTRY);
-	rlua_pushlightuserdata(L, &DEBUG_WATCH);
-	if (!get_index(L, hL, 1)) {
-		return 0;
-	}
+static void
+storewatch(rlua_State *L, int ref) {
+	get_registry(L, VAR::REGISTRY);
+	rlua_pushstring(L, "__debugger_watch");
+	new_field(L);
 	rlua_pushinteger(L, ref);
-	if (!get_index(L, hL, 1)) {
-		return 0;
-	}
-	return 1;
+	new_index(L);
+	rlua_copy(L, -1, -5);
+	rlua_pop(L, 4);
 }
 
 static int
@@ -575,12 +594,7 @@ lclient_evalwatch(rlua_State *L) {
 	}
 	int rets = lua_gettop(hL) - n;
 	for (int i = 0; i < rets; ++i) {
-		if (!storewatch(L, hL, i-rets)) {
-			rlua_pushboolean(L, 0);
-			rlua_pushstring(L, "error");
-			lua_settop(hL, n);
-			return 2;
-		}
+		storewatch(L, addwatch(hL, i-rets));
 	}
 	rlua_pushboolean(L, 1);
 	rlua_insert(L, -1-rets);
@@ -592,7 +606,8 @@ static int
 lclient_unwatch(rlua_State *L) {
 	rlua_Integer ref = rluaL_checkinteger(L, 1);
 	lua_State* hL = get_host(L);
-	if (lua::rawgetp(hL, LUA_REGISTRYINDEX, &DEBUG_WATCH) == LUA_TNIL) {
+	if (lua::getfield(hL, LUA_REGISTRYINDEX, "__debugger_watch") == LUA_TNIL) {
+		lua_pop(hL, 1);
 		return 0;
 	}
 	luaL_unref(hL, -1, (int)ref);
@@ -603,7 +618,7 @@ static int
 lclient_cleanwatch(rlua_State *L) {
 	lua_State* hL = get_host(L);
 	lua_pushnil(hL);
-	lua_rawsetp(hL, LUA_REGISTRYINDEX, &DEBUG_WATCH);
+	lua_setfield(hL, LUA_REGISTRYINDEX, "__debugger_watch");
 	return 0;
 }
 
@@ -621,6 +636,8 @@ init_visitor(rlua_State *L) {
 		{ "getuservaluev", lclient_getuservaluev },
 		{ "index", lclient_index },
 		{ "indexv", lclient_indexv },
+		{ "field", lclient_field },
+		{ "fieldv", lclient_fieldv },
 		{ "nextkey", lclient_nextkey },
 		{ "getstack", lclient_getstack },
 		{ "getstackv", lclient_getstackv },
@@ -641,9 +658,9 @@ init_visitor(rlua_State *L) {
 	};
 	rlua_newtable(L);
 	rluaL_setfuncs(L,l,0);
-	get_registry(L, VAR_GLOBAL);
+	get_registry(L, VAR::GLOBAL);
 	rlua_setfield(L, -2, "_G");
-	get_registry(L, VAR_REGISTRY);
+	get_registry(L, VAR::REGISTRY);
 	rlua_setfield(L, -2, "_REGISTRY");
 	return 1;
 }
