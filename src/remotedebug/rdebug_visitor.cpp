@@ -12,12 +12,16 @@ lua_State* get_host(rlua_State *L);
 // return value, name
 static int
 client_getlocal(rlua_State *L, int getref) {
-	int frame = (int)rluaL_checkinteger(L, 1);
-	int index = (int)rluaL_checkinteger(L, 2);
-
+	rlua_Integer frame = rluaL_checkinteger(L, 1);
+	rlua_Integer index = rluaL_checkinteger(L, 2);
+	if (frame < 0 || frame > (std::numeric_limits<uint16_t>::max)()) {
+		return rluaL_error(L, "frame must be `uint16_t`");
+	}
+	if (index == 0 || index > (std::numeric_limits<uint8_t>::max)() || -index > (std::numeric_limits<uint8_t>::max)()) {
+		return rluaL_error(L, "index must be `uint8_t`");
+	}
 	lua_State *hL = get_host(L);
-
-	const char *name = get_frame_local(L, hL, frame, index, getref);
+	const char *name = get_frame_local(L, hL, (uint16_t)frame, (int16_t)index, getref);
 	if (name) {
 		rlua_pushstring(L, name);
 		rlua_insert(L, -2);
@@ -150,6 +154,7 @@ lclient_copytable(rlua_State *L) {
 		return 0;
 	}
 	rlua_newtable(L);
+	rlua_Integer n = 0;
 	unsigned int hsize = remotedebug::table::hash_size(t);
 	for (unsigned int i = 0; i < hsize; ++i) {
 		if (remotedebug::table::get_kv(hL, t, i)) {
@@ -157,10 +162,11 @@ lclient_copytable(rlua_State *L) {
 				lua_pop(hL, 3);
 				return 1;
 			}
-			combine_kv(L, hL, 1, 0, VAR::INDEX_KEY, i);
-			// TODO: 如果value使用getref==0，可以提高效率，但是getref==1仍然是需要的
-			combine_kv(L, hL, 1, 1, VAR::INDEX_VAL, i);
-			rlua_rawset(L, -3);
+			combine_key(L, hL, 1, i);
+			rlua_rawseti(L, -2, ++n);
+			combine_val(L, hL, 1, i);
+			rlua_rawseti(L, -3, ++n);
+			rlua_rawseti(L, -2, ++n);
 		}
 	}
 	lua_pop(hL, 1);
@@ -189,14 +195,6 @@ lclient_value(rlua_State *L) {
 	lua_State *hL = get_host(L);
 	rlua_settop(L, 1);
 	get_value(L, hL);
-	return 1;
-}
-
-static int
-lclient_tostring(rlua_State *L) {
-	lua_State *hL = get_host(L);
-	rlua_settop(L, 1);
-	tostring(L, hL);
 	return 1;
 }
 
@@ -497,7 +495,9 @@ lclient_eval(rlua_State *L) {
 	const char* source = rluaL_checkstring(L, 2);
 	rlua_Integer level = rluaL_checkinteger(L, 3);
 	lua_State* hL = get_host(L);
-	lua_checkstack(hL, 3);
+	if (lua_checkstack(hL, 3) == 0) {
+		return rluaL_error(L, "stack overflow");
+	}
 	if (!getreffunc(hL, (lua_Integer)func)) {
 		rlua_pushboolean(L, 0);
 		rlua_pushstring(L, "invalid func");
@@ -521,7 +521,9 @@ static int
 lclient_evalref(rlua_State *L) {
 	lua_State* hL = get_host(L);
 	int n = rlua_gettop(L);
-	lua_checkstack(hL, n);
+	if (lua_checkstack(hL, n) == 0) {
+		return rluaL_error(L, "stack overflow");
+	}
 	for (int i = 1; i <= n; ++i) {
 		rlua_pushvalue(L, i);
 		int t = eval_value(L, hL);
@@ -546,7 +548,6 @@ lclient_evalref(rlua_State *L) {
 
 static int
 addwatch(lua_State *hL, int idx) {
-	lua_checkstack(hL, 3);
 	lua_pushvalue(hL, idx);
 	if (lua::getfield(hL, LUA_REGISTRYINDEX, "__debugger_watch") == LUA_TNIL) {
 		lua_pop(hL, 1);
@@ -577,7 +578,9 @@ lclient_evalwatch(rlua_State *L) {
 	const char* source = rluaL_checkstring(L, 2);
 	rlua_Integer level = rluaL_checkinteger(L, 3);
 	lua_State* hL = get_host(L);
-	lua_checkstack(hL, 3);
+	if (lua_checkstack(hL, 3) == 0) {
+		return rluaL_error(L, "stack overflow");
+	}
 	if (!getreffunc(hL, (lua_Integer)func)) {
 		rlua_pushboolean(L, 0);
 		rlua_pushstring(L, "invalid func");
@@ -644,7 +647,6 @@ init_visitor(rlua_State *L) {
 		{ "copytable", lclient_copytable },
 		{ "tablesize", lclient_tablesize },
 		{ "value", lclient_value },
-		{ "tostring", lclient_tostring },
 		{ "assign", lclient_assign },
 		{ "type", lclient_type },
 		{ "getinfo", lclient_getinfo },

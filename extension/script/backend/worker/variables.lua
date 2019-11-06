@@ -270,7 +270,8 @@ local function varGetTableValue(t)
 
     local loct = rdebug.copytable(t,SHORT_TABLE_FIELD)
     local kvs = {}
-    for key, value in pairs(loct) do
+    for i = 1, #loct, 3 do
+        local key, value = loct[i], loct[i+1]
         local kn = varGetName(key)
         kvs[#kvs + 1] = { kn, value }
     end
@@ -524,12 +525,13 @@ local function extandTableNamed(varRef)
     local evaluateName = varRef.eval
     local vars = {}
     local loct = rdebug.copytable(t,MAX_TABLE_FIELD)
-    for key, value in pairs(loct) do
+    for i = 1, #loct, 3 do
+        local key, value, valueref = loct[i], loct[i+1], loct[i+2]
         local evalKey = getTabelKey(key)
         varCreate(vars, varRef, nil
             , varGetName(key), nil
             , value, evaluateName and evalKey and ('%s%s'):format(evaluateName, evalKey)
-            , function() return value end
+            , function() return valueref end
         )
     end
     table.sort(vars, function(a, b) return a.name < b.name end)
@@ -793,12 +795,13 @@ local function extandGlobalNamed(varRef)
     varRef.extand = varRef.extand or {}
     local vars = {}
     local loct = rdebug.copytable(rdebug._G,MAX_TABLE_FIELD)
-    for key, value in pairs(loct) do
+    for i = 1, #loct, 3 do
+        local key, value, valueref = loct[i], loct[i+1], loct[i+2]
         if not isStandardName(key) then
             varCreate(vars, varRef, nil
                 , varGetName(key), nil
                 , value, ('_G%s'):format(getTabelKey(key))
-                , function() return value end
+                , function() return valueref end
             )
         end
     end
@@ -878,6 +881,35 @@ end
 
 function m.createRef(value, evaluateName, context)
     return varCreateReference(value, evaluateName, context)
+end
+
+function m.tostring(v)
+    local meta = rdebug.getmetatablev(v)
+    if meta ~= nil then
+        local fn = rdebug.fieldv(meta, '__tostring')
+        if fn ~= nil and (rdebug.type(fn) == 'function' or rdebug.type(fn) == 'c function') then
+            local ok, res = rdebug.evalref(fn, v)
+            if ok then
+                return res
+            end
+        end
+    end
+    local type = rdebug.type(v)
+    if type == 'integer' or
+        type == 'float' or
+        type == 'string' or
+        type == 'boolean' or
+        type == 'nil'
+    then
+        return tostring(rdebug.value(v))
+    end
+    if meta ~= nil then
+        local name = rdebug.fieldv(meta, '__name')
+        if name ~= nil then
+            type = tostring(rdebug.value(name))
+        end
+    end
+    return ('%s: %s'):format(type, tostring(rdebug.value(v)))
 end
 
 ev.on('terminated', function()
