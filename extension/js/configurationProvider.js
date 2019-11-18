@@ -46,9 +46,9 @@ function mergeConfigurations(config) {
         platname = "Linux"
         platcfg = config.linux
     }
-    config.windows = null
-    config.osx = null
-    config.linux = null
+    config.windows = undefined
+    config.osx = undefined
+    config.linux = undefined
     if (typeof platcfg == 'object') {
         for (var k in platcfg) {
             config[k] = platcfg[k]
@@ -80,8 +80,11 @@ function resolveConfig(folder, config) {
     if (typeof config.termOnExit != 'boolean') {
         config.termOnExit = config.request == 'launch';
     }
-    if (typeof config.luaRuntime != 'string') {
-        config.luaRuntime = settings.luaRuntime
+    if (typeof config.luaVersion != 'string') {
+        config.luaVersion = settings.luaVersion
+    }
+    if (typeof config.luaArch != 'string') {
+        config.luaArch = settings.luaArch
     }
     if (typeof config.console != 'string') {
         config.console = settings.console
