@@ -97,6 +97,11 @@ end)
 --local log = require 'common.log'
 --print = log.info
 
+local function cleanFrame()
+    variables.clean()
+    statckFrame = {}
+end
+
 function CMD.initializing(pkg)
     luaver.init()
     ev.emit('initializing', pkg.config)
@@ -167,6 +172,14 @@ function CMD.stackTrace(pkg)
     local levels = (pkg.levels and pkg.levels ~= 0) and pkg.levels or 200
     local res = {}
 
+    --
+    -- 在VSCode的实现中这是一帧的第一个请求，所以在这里清理上一帧的数据。
+    -- 很特殊，但目前也只能这样。
+    --
+    if start == 0 and levels == 1 then
+        cleanFrame()
+    end
+
     -- TODO
     --local virtualFrame = 0
     --if startFrame == 0 then
@@ -181,7 +194,6 @@ function CMD.stackTrace(pkg)
     local coroutineId = 0
     repeat
         hookmgr.sethost(L)
-        coroutineId = coroutineId + 1
         if start > statckFrame[L] then
             start = start - statckFrame[L]
         else
@@ -192,6 +204,7 @@ function CMD.stackTrace(pkg)
             start = 0
             levels = levels - n
         end
+        coroutineId = coroutineId + 1
         L = coroutineTree[L]
     until not L
     hookmgr.sethost(baseL)
@@ -216,9 +229,9 @@ function CMD.source(pkg)
 end
 
 function CMD.scopes(pkg)
-    local coid = pkg.frameId >> 16
+    local coid = (pkg.frameId >> 16) + 1
     local depth = pkg.frameId & 0xFFFF
-    hookmgr.sethost(statckFrame[coid])
+    hookmgr.sethost(assert(statckFrame[coid]))
     sendToMaster {
         cmd = 'scopes',
         command = pkg.command,
@@ -370,11 +383,6 @@ function CMD.stepOut()
     hookmgr.step_out()
 end
 
-local function cleanFrame()
-    variables.clean()
-    statckFrame = {}
-end
-
 function CMD.restartFrame()
     cleanFrame()
     sendToMaster {
@@ -397,7 +405,6 @@ local function runLoop(reason, text)
             break
         end
     end
-    cleanFrame()
 end
 
 local event = {}
@@ -471,14 +478,6 @@ local function getEventArgs(i)
         return false
     end
     return true, rdebug.value(value)
-end
-
-local function getEventArgsRaw(i)
-    local name, value = rdebug.getlocal(1, -i)
-    if name == nil then
-        return false
-    end
-    return true, value
 end
 
 local function pairsEventArgs()
@@ -585,20 +584,22 @@ function event.exception()
     runLoop('exception', exceptionMsg)
 end
 
-function event.r_thread(L, from, type)
-    if from then
+function event.r_thread(co, type)
+    local L = hookmgr.gethost()
+    if co then
         if type == 0 then
-            coroutineTree[L] = from
+            coroutineTree[L] = co
         elseif type == 1 then
-            coroutineTree[from] = nil
+            coroutineTree[co] = nil
         end
     end
     hookmgr.updatehookmask(L)
 end
 
 function event.thread()
-    local _, L = getEventArgsRaw(1)
-    hookmgr.updatehookmask(L)
+    local _, co = rdebug.getlocalv(1, -1)
+    local _, type = rdebug.getlocalv(1, -2)
+    event.r_thread(co, type)
 end
 
 function event.wait()

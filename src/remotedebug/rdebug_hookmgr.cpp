@@ -193,7 +193,7 @@ struct hookmgr {
         }
         set_host(cL, hL);
         rlua_pushstring(cL, "funcbp");
-        rlua_pushfstring(cL, "[function: %p]", function);
+        rlua_pushfstring(cL, "function: %p", function);
         if (rlua_pcall(cL, 2, 0, 0) != LUA_OK) {
             rlua_pop(cL, 1);
         }
@@ -355,10 +355,9 @@ struct hookmgr {
         }
         set_host(cL, hL);
         rlua_pushstring(cL, "r_thread");
-        rlua_pushlightuserdata(cL, hL);
         rlua_pushlightuserdata(cL, lua_touserdata(hL, -1));
         rlua_pushinteger(cL, ar->currentline);
-        if (rlua_pcall(cL, 4, 0, 0) != LUA_OK) {
+        if (rlua_pcall(cL, 3, 0, 0) != LUA_OK) {
             rlua_pop(cL, 1);
             return;
         }
