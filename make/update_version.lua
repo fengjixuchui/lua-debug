@@ -1,26 +1,5 @@
-local platform, luamake = ...
-
-if not platform then
-    local OS = require 'bee.platform'.OS
-    if OS == 'Windows' then
-        platform = 'msvc'
-    elseif OS == 'macOS' then
-        platform = 'macos'
-    elseif OS == 'Linux' then
-        platform = 'linux'
-    end
-end
-
-if not luamake then
-    luamake = 'luamake'
-end
-
-print 'Step 1. init'
-
 local fs = require 'bee.filesystem'
-local sp = require 'bee.subprocess'
 local root = fs.absolute(fs.path '.')
-local outputDir = root / 'publish'
 
 local version = (function()
     for line in io.lines((root / 'extension' / 'package.json'):string()) do
@@ -58,18 +37,6 @@ local function io_save(filepath, buf)
     f:close()
 end
 
-local function spawn(t)
-    local process = assert(sp.spawn(t))
-    local code = process:wait()
-    if code ~= 0 then
-        os.exit(code, true)
-    end
-end
-
-print 'Step 2. remove old file'
-fs.remove_all(outputDir)
-
-print 'Step 3. update version'
 local function update_version(filename, pattern)
     local str = io_load(filename)
     local find_pattern = pattern:gsub('[%^%$%(%)%%%.%[%]%+%-%?]', '%%%0'):gsub('{}', '%%d+%%.%%d+%%.%%d+')
@@ -90,29 +57,3 @@ local function update_version(filename, pattern)
 end
 
 update_version(root / '.vscode' / 'launch.json', 'actboy168.lua-debug-{}')
-
-print 'Step 4. copy extension'
-copy_directory(root / 'extension', outputDir,
-    function (path)
-        local ext = path:extension():string():lower()
-        return (ext ~= '.dll') and (ext ~= '.exe')
-    end
-)
-fs.copy_file(root / "LICENSE", outputDir / "LICENSE", true)
-
-print 'Step 5. compile'
-if platform == 'msvc' then
-    spawn {
-        luamake, 'remake', '-f', 'make-runtime.lua', '-arch', 'x86',
-        cwd = root,
-        searchPath = true,
-    }
-end
-
-spawn {
-    luamake, 'remake', '-f', 'make-runtime.lua', '-arch', 'x64',
-    cwd = root,
-    searchPath = true,
-}
-
-print 'finish.'
