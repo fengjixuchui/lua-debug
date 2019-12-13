@@ -1,100 +1,64 @@
 name: build
 on: [push]
 jobs:
-  msvc:
-    runs-on: windows-latest
+  compile:
+    runs-on: ${{ matrix.image }}
     strategy:
       matrix:
-        arch: [x86, x64]
+        os: [windows-x86, windows-x64, linux, macos]
+        include:
+        - os: windows-x86
+          image: windows-latest
+          plat: msvc
+          arch: x86
+        - os: windows-x64
+          image: windows-latest
+          plat: msvc
+          arch: x64
+        - os: linux
+          image: ubuntu-latest
+          plat: linux
+        - os: macos
+          image: macos-latest
+          plat: macos
     steps:
     - uses: actions/checkout@v1
       with:
         ref: refs/heads/master
         submodules : recursive
-    - uses: ilammy/msvc-dev-cmd@v1
-      with:
-        arch: ${{ matrix.arch }}
-    - name: Compile luamake
-      run: |
-        git clone --depth 1 https://github.com/actboy168/luamake
-        cd luamake
-        git submodule update --init --recursive
-        .\msvc_build.bat
-        cd ..
-    - name: Compile
-      run: |
-        .\luamake\luamake remake -arch ${{ matrix.arch }}
-    - name: Upload artifact
-      uses: actions/upload-artifact@v1.0.0
-      with:
-        name: lua-debug
-        path: publish
-  linux:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v1
-      with:
-        ref: refs/heads/master
-        submodules : recursive
-    - name: Init
-      run: |
-        sudo apt-get install -y libreadline-dev ninja-build
-    - name: Compile luamake
-      run: |
-        git clone --depth 1 https://github.com/actboy168/luamake
-        cd luamake
-        git submodule update --init --recursive
-        ninja -f ninja/linux.ninja
-        cd ..
-    - name: Compile
-      run: |
-        ./luamake/luamake
-    - name: Upload artifact
-      uses: actions/upload-artifact@v1.0.0
-      with:
-        name: lua-debug
-        path: publish
-  macos:
-    runs-on: macOS-latest
-    steps:
-    - uses: actions/checkout@v1
-      with:
-        ref: refs/heads/master
-        submodules : recursive
-    - name: Init
-      run: |
-        brew install ninja
-    - name: Compile luamake
-      run: |
-        git clone --depth 1 https://github.com/actboy168/luamake
-        cd luamake
-        git submodule update --init --recursive
-        ninja -f ninja/macos.ninja
-        cd ..
-    - name: Compile
-      run: |
-        ./luamake/luamake
-    - name: Upload artifact
-      uses: actions/upload-artifact@v1.0.0
+    - if: runner.os == 'Linux'
+      run: sudo apt-get install -y libreadline-dev ninja-build
+    - if: runner.os == 'macOS'
+      run: brew install ninja
+    - run: git clone --recurse-submodules -j8 --depth 1 https://github.com/actboy168/luamake
+    - if: runner.os != 'Windows'
+      run: ninja -f ninja/${{ matrix.plat }}.ninja
+      working-directory: luamake
+    - if: runner.os == 'Windows'
+      run: .\msvc_build.bat
+      working-directory: luamake
+    - run: ./luamake/luamake -p ${{ matrix.plat }} -arch ${{ matrix.arch }}
+      shell: bash
+    - uses: actions/upload-artifact@v1.0.0
       with:
         name: lua-debug
         path: publish
   publish:
     runs-on: macOS-latest
-    needs: [msvc, linux, macos]
+    needs: compile
     steps:
-      - name: Download artifact
-        uses: actions/download-artifact@v1.0.0
+      - uses: actions/download-artifact@v1.0.0
         with:
           name: lua-debug
           path: publish
+      - run: npm install -g vsce
       - name: Publish
+        working-directory: publish
         run: |
-          npm install -g vsce
-          ls
-          cd publish
           chmod -v +x runtime/linux/lua5*/lua
           chmod -v +x runtime/macos/lua5*/lua
           chmod -v +x bin/linux/lua-debug
           chmod -v +x bin/macos/lua-debug
-          vsce publish -p ${{ secrets.VSCE_KEY }} || true
+      - run: vsce publish -p ${{ secrets.VSCE_KEY }}
+        working-directory: publish
+        continue-on-error: true
