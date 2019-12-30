@@ -1,5 +1,5 @@
 name: build
-on: [push]
+on: push
 jobs:
   compile:
     runs-on: ${{ matrix.os }}-latest
@@ -8,13 +8,6 @@ jobs:
       matrix:
         os: [windows, ubuntu, macos]
         arch: [x86, x64]
-        include:
-        - os: windows
-          plat: msvc
-        - os: ubuntu
-          plat: linux
-        - os: macos
-          plat: macos
         exclude:
         - os: ubuntu
           arch: x86
@@ -25,21 +18,10 @@ jobs:
       with:
         ref: refs/heads/master
         submodules : recursive
-    - if: runner.os == 'Windows'
-      uses: ilammy/msvc-dev-cmd@v1
+    - uses: actboy168/setup-luamake@master
       with:
         arch: ${{ matrix.arch }}
-    - if: runner.os == 'Windows'
-      run: $env:Path += ";$pwd\luamake\tools\"
-    - if: runner.os == 'Linux'
-      run: sudo apt-get install -y libreadline-dev ninja-build
-    - if: runner.os == 'macOS'
-      run: brew install ninja
-    - run: git clone --recurse-submodules -j8 --depth 1 https://github.com/actboy168/luamake
-    - run: ninja -f ninja/${{ matrix.plat }}.ninja
-      working-directory: luamake
-    - run: ./luamake/luamake -p ${{ matrix.plat }} -arch ${{ matrix.arch }}
-      shell: bash
+    - run: luamake
     - uses: actions/upload-artifact@v1.0.0
       with:
         name: lua-debug
@@ -48,18 +30,11 @@ jobs:
     runs-on: macos-latest
     needs: compile
     steps:
+      - run: npm install -g vsce
       - uses: actions/download-artifact@v1.0.0
         with:
           name: lua-debug
-          path: publish
-      - run: npm install -g vsce
-      - name: Publish
-        working-directory: publish
-        run: |
-          chmod -v +x runtime/linux/lua5*/lua
-          chmod -v +x runtime/macos/lua5*/lua
-          chmod -v +x bin/linux/lua-debug
-          chmod -v +x bin/macos/lua-debug
-      - run: vsce publish -p ${{ secrets.VSCE_KEY }}
-        working-directory: publish
+      - run: chmod -v +x lua-debug/runtime/[^w]*/lua5*/lua
+      - run: chmod -v +x lua-debug/bin/[^w]*/lua-debug
+      - run: cd lua-debug && vsce publish -p ${{ secrets.VSCE_KEY }}
         continue-on-error: true
