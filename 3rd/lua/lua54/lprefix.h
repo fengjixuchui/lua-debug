@@ -44,4 +44,3 @@
 #include "luai_userstate.h"
 
 #endif
-
