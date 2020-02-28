@@ -8,7 +8,7 @@ local traceback = require 'backend.worker.traceback'
 local stdout = require 'backend.worker.stdout'
 local emulator = require 'backend.worker.emulator'
 local luaver = require 'backend.worker.luaver'
-local ev = require 'common.event'
+local ev = require 'backend.event'
 local hookmgr = require 'remotedebug.hookmgr'
 local stdio = require 'remotedebug.stdio'
 local thread = require 'remotedebug.thread'
@@ -117,6 +117,10 @@ function CMD.terminated()
         initialized = false
         state = 'running'
         ev.emit('terminated')
+        sendToMaster {
+            cmd = 'eventThread',
+            reason = 'exited',
+        }
     end
 end
 
@@ -685,14 +689,7 @@ function event.event_line()
 end
 
 function event.exit()
-    local exit = initialized
     CMD.terminated()
-    if exit then
-        sendToMaster {
-            cmd = 'eventThread',
-            reason = 'exited',
-        }
-    end
 end
 
 hookmgr.init(function(name, ...)
