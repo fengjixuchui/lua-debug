@@ -3,8 +3,8 @@ local source = require 'backend.worker.source'
 local luaver = require 'backend.worker.luaver'
 local ev = require 'backend.event'
 
-local SHORT_TABLE_FIELD = 100
-local MAX_TABLE_FIELD = 1000
+local SHORT_TABLE_FIELD <const> = 100
+local MAX_TABLE_FIELD <const> = 1000
 local LUAVERSION = 54
 
 local info = {}
@@ -331,11 +331,15 @@ local function getFunctionCode(str, startLn, endLn)
     return str:sub(startPos, endPos)
 end
 
--- context: getvalue,setvalue,scopes,hover,watch,repl,copyvalue
+local function quotedString(s)
+    return ("%q"):format(s):sub(2,-2):gsub("\\\n", "\\n")
+end
+
+-- context: variables,hover,watch,repl,clipboard
 local function varGetValue(context, type, value)
     if type == 'string' then
         local str = rdebug.value(value)
-        if context == "repl" or context == "copyvalue" then
+        if context == "repl" or context == "clipboard" then
             return ("'%s'"):format(str)
         end
         if context == "hover" then
@@ -345,9 +349,9 @@ local function varGetValue(context, type, value)
             return ("'%s...'"):format(str:sub(1, 2048))
         end
         if #str < 1024 then
-            return ("'%s'"):format(str)
+            return ("'%s'"):format(quotedString(str))
         end
-        return ("'%s...'"):format(str:sub(1, 1024))
+        return ("'%s...'"):format(quotedString(str:sub(1, 1024)))
     elseif type == 'boolean' then
         if rdebug.value(value) then
             return 'true'
@@ -476,7 +480,7 @@ local function varCreate(vars, varRef, kind, name, nameidx, value, evaluateName,
     if type(evaluateName) ~= "string" then
         evaluateName = nil
     end
-    local var = varCreateReference(value, evaluateName, "getvalue")
+    local var = varCreateReference(value, evaluateName, "variables")
     var.name = name
     var.evaluateName = evaluateName
     var.presentationHint = kind and { kind = kind } or nil
@@ -836,7 +840,7 @@ local function setValue(varRef, name, value)
     if not rdebug.assign(rvalue, newvalue) then
         return nil, 'Failed set variable'
     end
-    return varCreateReference(rvalue, evaluateName, "setvalue")
+    return varCreateReference(rvalue, evaluateName, "variables")
 end
 
 local m = {}

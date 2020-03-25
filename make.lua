@@ -188,18 +188,30 @@ for _, luaver in ipairs {"lua51","lua52","lua53","lua54"} do
 
 end
 
+lm:build 'copy_extension' {
+    '$luamake', 'lua', 'make/copy_extension.lua',
+}
+
+lm:build 'update_version' {
+    '$luamake', 'lua', 'make/update_version.lua',
+}
+
+lm.rootdir = ''
+lm:import '3rd/bee.lua/make.lua'
+
 if platform.OS == "Windows" and lm.arch == "x64" then
     lm:build 'install' {
         '$luamake', 'lua', 'make/install_runtime.lua', lm.plat, lm.arch,
         deps = {
+            'bee',
+            'bootstrap',
+            'copy_extension',
+            'update_version',
             "launcher",
             runtimes,
         }
     }
 else
-    lm.rootdir = ''
-    lm:import '3rd/bee.lua/make.lua'
-
     if platform.OS == "Windows" then
         lm:shared_library 'inject' {
             deps = {
@@ -233,14 +245,6 @@ else
             }
         }
     end
-
-    lm:build 'copy_extension' {
-        '$luamake', 'lua', 'make/copy_extension.lua',
-    }
-
-    lm:build 'update_version' {
-        '$luamake', 'lua', 'make/update_version.lua',
-    }
 
     lm:build 'install' {
         '$luamake', 'lua', 'make/install_runtime.lua', lm.plat, lm.arch,
