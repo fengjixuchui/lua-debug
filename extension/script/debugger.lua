@@ -1,4 +1,4 @@
-local root, luaapi, ansi = ...
+local root, luaapi = ...
 
 local platform = (function()
     if package.config:sub(1,1) == "\\" then
@@ -67,14 +67,18 @@ if luaapi then
 end
 local rdebug = assert(package.loadlib(remotedebug,'luaopen_remotedebug'))()
 
-if ansi then
-    root = rdebug.a2u(root)
-end
 
 local dbg = {}
 
-function dbg:start(addr, client)
-    local address = ("%q, %s"):format(addr, client == true and "true" or "false")
+function dbg:start(addr, client, ansi)
+    local function utf8(s)
+        if ansi and platform == "windows" then
+            return rdebug.a2u(s)
+        end
+        return s
+    end
+    local root = utf8(root)
+    local address = ("%q, %s"):format(utf8(addr), client == true and "true" or "false")
     local bootstrap_lua = ([[
         package.path = %q
         package.cpath = %q
@@ -92,7 +96,7 @@ function dbg:start(addr, client)
         require 'backend.worker' .openupdate()
     ]]):format(
           root
-        , ansi and rdebug.a2u(address) or address
+        , address
     ))
 end
 
@@ -100,8 +104,12 @@ function dbg:wait()
     rdebug.probe 'wait'
 end
 
-function dbg:event(name, ...)
-    return rdebug.event('event_'..name, ...)
+function dbg:set_wait(name, f)
+    _G[name] = function(...)
+        _G[name] = nil
+        f(...)
+        rdebug.probe 'wait'
+    end
 end
 
 debug.getregistry()["lua-debug"] = dbg
