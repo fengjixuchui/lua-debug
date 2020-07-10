@@ -92,7 +92,7 @@ local function proxy_attach(pkg)
         return
     end
     if args.processName then
-        local pids = inject.query_process(args.processName)
+        local pids = require "query_process"(args.processName)
         if #pids == 0 then
             response_error(pkg, ('Cannot found process `%s`.'):format(args.processName))
             return
@@ -112,12 +112,12 @@ local function proxy_launch_terminal(pkg)
     local args = pkg.arguments
     if args.runtimeExecutable then
         --TODO: support runtimeExecutable's integratedTerminal/externalTerminal
-        response_error(pkg, "`runtimeExecutable` is not supported.")
+        response_error(pkg, "`runtimeExecutable` is not supported in `"..args.console.."`.")
         return
     end
     local pid = sp.get_id()
     server = network(getUnixAddress(pid), true)
-    local arguments, err = debuggerFactory.create_terminal(args, WORKDIR, pid)
+    local arguments, err = debuggerFactory.create_luaexe_in_terminal(args, WORKDIR, pid)
     if not arguments then
         response_error(pkg, err)
         return
@@ -133,7 +133,7 @@ local function proxy_launch_console(pkg)
             response_error(pkg, "`runtimeExecutable` is not supported.")
             return
         end
-        local process, err = debuggerFactory.create_process(args)
+        local process, err = debuggerFactory.create_process_in_console(args)
         if not process then
             response_error(pkg, err)
             return
@@ -142,7 +142,7 @@ local function proxy_launch_console(pkg)
     else
         local pid = sp.get_id()
         server = network(getUnixAddress(pid), true)
-        local ok, err = debuggerFactory.create_luaexe(args, WORKDIR, pid)
+        local ok, err = debuggerFactory.create_luaexe_in_console(args, WORKDIR, pid)
         if not ok then
             response_error(pkg, err)
             return
