@@ -128,17 +128,23 @@ function special_has.Return(frameId)
 end
 
 function special_has.Global()
-    local gt = rdebug._G
-    local key
-    while true do
-        key = rdebug.nextkey(gt, key)
+    local global = rdebug._G
+    local asize, hsize = rdebug.tablesize(global)
+    if asize ~= 0 then
+        return true
+    end
+    local key = nil
+    local next = 0
+    while next < hsize do
+        key, next = rdebug.tablekey(global, next)
         if not key then
-            return false
+            break
         end
         if not standard[key] then
             return true
         end
     end
+    return false
 end
 
 function special_has.Standard()
@@ -195,7 +201,8 @@ local function varCanExtand(type, value)
     elseif type == 'c function' then
         return rdebug.getupvaluev(value, 1) ~= nil
     elseif type == 'table' then
-        if rdebug.nextkey(value, nil) ~= nil then
+        local asize, hsize = rdebug.tablesize(value)
+        if asize ~= 0 or hsize ~= 0 then
             return true
         end
         if rdebug.getmetatablev(value) ~= nil then
@@ -323,9 +330,9 @@ local function varGetTableValue(t)
         end
     end
 
-    local loct = rdebug.copytable(t,SHORT_TABLE_FIELD)
+    local loct = rdebug.tablehashv(t,SHORT_TABLE_FIELD)
     local kvs = {}
-    for i = 1, #loct, 3 do
+    for i = 1, #loct, 2 do
         local key, value = loct[i], loct[i+1]
         local kn = varGetShortName(key)
         kvs[#kvs + 1] = { kn, value }
@@ -404,7 +411,7 @@ local function varGetUserdata(value)
     if meta ~= nil then
         local fn = rdebug.fieldv(meta, '__debugger_tostring')
         if fn ~= nil and (rdebug.type(fn) == 'function' or rdebug.type(fn) == 'c function') then
-            local ok, res = rdebug.evalref(fn, value)
+            local ok, res = rdebug.eval(fn, value)
             if ok then
                 return res
             end
@@ -460,7 +467,7 @@ local function varGetValue(context, type, value)
     elseif type == 'lightuserdata' then
         return 'light' .. tostring(rdebug.value(value))
     elseif type == 'thread' then
-        return ('thread (%s)'):format(rdebug.co_status(value))
+        return ('thread (%s)'):format(rdebug.costatus(value))
     end
     return tostring(rdebug.value(value))
 end
@@ -563,6 +570,13 @@ local function getTabelKey(key)
     end
 end
 
+local function evaluateTabelKey(table, key)
+    local evaluateKey = getTabelKey(key)
+    if table and evaluateKey then
+        return ("%s%s"):format(table, evaluateKey)
+    end
+end
+
 local function extandTableIndexed(varRef, start, count)
     varRef.extand = varRef.extand or {}
     local t = varRef.v
@@ -591,13 +605,12 @@ local function extandTableNamed(varRef)
     local t = varRef.v
     local evaluateName = varRef.eval
     local vars = {}
-    local loct = rdebug.copytable(t,MAX_TABLE_FIELD)
+    local loct = rdebug.tablehash(t,MAX_TABLE_FIELD)
     for i = 1, #loct, 3 do
         local key, value, valueref = loct[i], loct[i+1], loct[i+2]
-        local evalKey = getTabelKey(key)
         varCreate(vars, varRef, nil
             , varGetName(key), nil
-            , value, evaluateName and evalKey and ('%s%s'):format(evaluateName, evalKey)
+            , value, evaluateTabelKey(evaluateName, key)
             , function() return valueref end
         )
     end
@@ -819,13 +832,13 @@ end
 local function extandGlobalNamed(varRef)
     varRef.extand = varRef.extand or {}
     local vars = {}
-    local loct = rdebug.copytable(rdebug._G,MAX_TABLE_FIELD)
+    local loct = rdebug.tablehash(rdebug._G,MAX_TABLE_FIELD)
     for i = 1, #loct, 3 do
         local key, value, valueref = loct[i], loct[i+1], loct[i+2]
         if not isStandardName(key) then
             varCreate(vars, varRef, nil
                 , varGetName(key), nil
-                , value, ('_G%s'):format(getTabelKey(key))
+                , value, evaluateTabelKey("_G", key)
                 , function() return valueref end
             )
         end
@@ -851,7 +864,7 @@ function special_extand.Standard(varRef)
         if value ~= nil then
             varCreate(vars, varRef, nil
                 , name, nil
-                , value , ('_G%s'):format(getTabelKey(name))
+                , value, ("_G.%s"):format(name)
                 , function() return rdebug.field(rdebug._G, name) end
             )
         end
@@ -955,7 +968,7 @@ function m.tostring(v)
     if meta ~= nil then
         local fn = rdebug.fieldv(meta, '__tostring')
         if fn ~= nil and (rdebug.type(fn) == 'function' or rdebug.type(fn) == 'c function') then
-            local ok, res = rdebug.evalref(fn, v)
+            local ok, res = rdebug.eval(fn, v)
             if ok then
                 return res
             end
