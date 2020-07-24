@@ -1,7 +1,7 @@
 {
     "name": "lua-debug",
     "displayName": "Lua Debug",
-    "version": "1.25.2",
+    "version": "1.25.4",
     "publisher": "actboy168",
     "icon": "images/logo.png",
     "description": "Visual Studio Code debugger extension for Lua",
@@ -321,11 +321,6 @@
                                     "stderr"
                                 ]
                             },
-                            "internalModule": {
-                                "type": "string",
-                                "markdownDescription": "Internal module name",
-                                "default": "debugger"
-                            },
                             "useWSL": {
                                 "type": "boolean",
                                 "description": "Use Windows Subsystem for Linux.",
@@ -442,11 +437,6 @@
                                     "io.write",
                                     "stderr"
                                 ]
-                            },
-                            "internalModule": {
-                                "type": "string",
-                                "markdownDescription": "Internal module name",
-                                "default": "debugger"
                             },
                             "useWSL": {
                                 "type": "boolean",
