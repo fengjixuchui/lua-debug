@@ -67,7 +67,6 @@ if luaapi then
 end
 local rdebug = assert(package.loadlib(remotedebug,'luaopen_remotedebug'))()
 
-
 local dbg = {}
 
 function dbg:start(addr, client, ansi)
@@ -154,5 +153,8 @@ function dbg:setup_patch()
     return self
 end
 
+dbg.root = root
+
 debug.getregistry()["lua-debug"] = dbg
+
 return dbg
