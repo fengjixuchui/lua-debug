@@ -65,6 +65,8 @@ local remotedebug = root..rt..'/remotedebug.'..ext
 if luaapi then
     assert(package.loadlib(remotedebug,'init'))(luaapi)
 end
+
+---@type RemoteDebug
 local rdebug = assert(package.loadlib(remotedebug,'luaopen_remotedebug'))()
 
 local dbg = {}
@@ -81,7 +83,6 @@ function dbg:start(addr, client, ansi)
     local bootstrap_lua = ([[
         package.path = %q
         package.cpath = %q
-        if debug.setcstacklimit then debug.setcstacklimit(200) end
         require "remotedebug.thread".bootstrap_lua = debug.getinfo(1, "S").source
     ]]):format(
           root..'/script/?.lua'

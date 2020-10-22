@@ -1,7 +1,7 @@
 {
     "name": "lua-debug",
     "displayName": "Lua Debug",
-    "version": "1.27.0",
+    "version": "1.28.1",
     "publisher": "actboy168",
     "icon": "images/logo.png",
     "description": "Visual Studio Code debugger extension for Lua",
@@ -56,7 +56,19 @@
                     "when": "resourceLangId == lua",
                     "group": "1_run@20"
                 }
-            ]
+            ],
+            "debug/variables/context": [
+                {
+                    "command": "extension.lua-debug.showIntegerAsDec",
+                    "when": "debugConfigurationType == 'lua' && debugProtocolVariableMenuContext == 'integer/hex'",
+                    "group": "1_view"
+                },
+                {
+                    "command": "extension.lua-debug.showIntegerAsHex",
+                    "when": "debugConfigurationType == 'lua' && debugProtocolVariableMenuContext == 'integer/dec'",
+                    "group": "1_view"
+                }
+              ]
         },
         "commands": [
             {
@@ -68,6 +80,14 @@
                 "command": "extension.lua-debug.debugEditorContents",
                 "title": "Debug File",
                 "icon": "$(debug-alt)"
+            },
+            {
+                "command": "extension.lua-debug.showIntegerAsDec",
+                "title": "Show as Dec"
+            },
+            {
+                "command": "extension.lua-debug.showIntegerAsHex",
+                "title": "Show as Hex"
             }
         ],
         "debuggers": [
