@@ -32,9 +32,12 @@ local baseL
 
 local CMD = {}
 
-thread.newchannel ('DbgWorker' .. thread.id)
+local WorkerId = tostring(hookmgr.gethost())
+local WorkerChannel = ('DbgWorker(%s)'):format(WorkerId)
+
+thread.newchannel (WorkerChannel)
 local masterThread = thread.channel 'DbgMaster'
-local workerThread = thread.channel ('DbgWorker' .. thread.id)
+local workerThread = thread.channel (WorkerChannel)
 
 local function workerThreadUpdate(timeout)
     while true do
@@ -56,7 +59,7 @@ local function workerThreadUpdate(timeout)
 end
 
 local function sendToMaster(msg)
-	masterThread:push(thread.id, assert(json.encode(msg)))
+	masterThread:push(WorkerId, assert(json.encode(msg)))
 end
 
 ev.on('breakpoint', function(reason, bp)
@@ -127,8 +130,7 @@ function CMD.exit()
     if initialized then
         CMD.terminated()
         sendToMaster {
-            cmd = 'eventThread',
-            reason = 'exited',
+            cmd = 'exitThread',
         }
     end
 end
@@ -186,13 +188,14 @@ local function stackTrace(res, coid, start, levels)
             column = 0,
         }
         if info.what ~= 'C' then
-            r.line = info.currentline
             r.column = 1
             local src = source.create(info.source)
             if source.valid(src) then
+                r.line = source.line(src, info.currentline)
                 r.source = source.output(src)
                 r.presentationHint = 'normal'
             else
+                r.line = info.currentline
                 r.presentationHint = 'label'
             end
         else
@@ -523,7 +526,7 @@ local function event_breakpoint(src, line)
         hookmgr.break_closeline()
         return
     end
-    local bp = breakpoint.find(src, line)
+    local bp = breakpoint.find(src, source.line(src, line))
     if bp then
         if breakpoint.exec(bp) then
             state = 'stopped'
@@ -636,7 +639,7 @@ function event.print()
     rdebug.getinfo(1, "Sl", info)
     local src = source.create(info.source)
     if source.valid(src) then
-        stdout(res, src, info.currentline)
+        stdout(res, src, source.line(src, info.currentline))
     else
         stdout(res)
     end
@@ -653,7 +656,7 @@ function event.iowrite()
     rdebug.getinfo(1, "Sl", info)
     local src = source.create(info.source)
     if source.valid(src) then
-        stdout(res, src, info.currentline)
+        stdout(res, src, source.line(src, info.currentline))
     else
         stdout(res)
     end
@@ -768,8 +771,7 @@ ev.on('terminated', function()
 end)
 
 sendToMaster {
-    cmd = 'eventThread',
-    reason = 'started',
+    cmd = 'startThread',
 }
 
 local w = {}

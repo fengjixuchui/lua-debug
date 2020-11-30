@@ -1,7 +1,7 @@
 {
     "name": "lua-debug",
     "displayName": "Lua Debug",
-    "version": "1.28.1",
+    "version": "1.29.1",
     "publisher": "actboy168",
     "icon": "images/logo.png",
     "description": "Visual Studio Code debugger extension for Lua",
@@ -42,6 +42,9 @@
         "breakpoints": [
             {
                 "language": "lua"
+            },
+            {
+                "language": "html"
             }
         ],
         "menus": {
@@ -485,6 +488,11 @@
         ],
         "configuration": {
             "properties": {
+                "lua.debug.variables.showIntegerAsHex": {
+                    "type": "boolean",
+                    "description": "Show integer as hex.",
+                    "default": false
+                },
                 "lua.debug.settings.console": {
                     "type": "string",
                     "enum": [

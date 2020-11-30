@@ -1,6 +1,6 @@
+local mgr = require 'backend.master.mgr'
 local event = require 'backend.master.event'
 local response = require 'backend.master.response'
-local ev = require 'backend.event'
 
 local CMD = {}
 
@@ -30,7 +30,7 @@ function CMD.evaluate(w, req)
         response.error(req, req.message)
         return
     end
-    if req.body.variablesReference then
+    if req.body.variablesReference ~= 0 then
         req.body.variablesReference = (w << 24) | req.body.variablesReference
     end
     response.success(req, req.body)
@@ -52,7 +52,9 @@ end
 
 function CMD.scopes(w, req)
     for _, scope in ipairs(req.scopes) do
-        scope.variablesReference = (w << 24) | scope.variablesReference
+        if scope.variablesReference ~= 0 then
+            scope.variablesReference = (w << 24) | scope.variablesReference
+        end
     end
     response.success(req, {
         scopes = req.scopes
@@ -65,7 +67,7 @@ function CMD.variables(w, req)
         return
     end
     for _, var in ipairs(req.variables) do
-        if var.variablesReference then
+        if var.variablesReference ~= 0 then
             var.variablesReference = (w << 24) | var.variablesReference
         end
     end
@@ -82,9 +84,14 @@ function CMD.eventOutput(_, req)
     event.output(req.category, req.output, req.source, req.line)
 end
 
-function CMD.eventThread(w, req)
-    ev.emit('thread', req.reason, w)
-    event.thread(req.reason, w)
+function CMD.startThread(workerId)
+    local w = mgr.startThread(workerId)
+    event.thread('started', w)
+end
+
+function CMD.exitThread(w)
+    mgr.exitThread(w)
+    event.thread('exited', w)
 end
 
 function CMD.eventInvalidated(w, req)
