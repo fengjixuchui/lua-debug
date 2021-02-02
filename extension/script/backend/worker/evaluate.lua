@@ -13,10 +13,10 @@ if not readfile then
     end
 end
 
-local eval_repl   = assert(rdebug.reffunc(readfile 'backend.worker.eval.repl'))
-local eval_watch  = assert(rdebug.reffunc(readfile 'backend.worker.eval.watch'))
-local eval_verify = assert(rdebug.reffunc(readfile 'backend.worker.eval.verify'))
-local eval_dump   = assert(rdebug.reffunc(readfile 'backend.worker.eval.dump'))
+local eval_repl   = assert(rdebug.load(readfile 'backend.worker.eval.repl'))
+local eval_watch  = assert(rdebug.load(readfile 'backend.worker.eval.watch'))
+local eval_verify = assert(rdebug.load(readfile 'backend.worker.eval.verify'))
+local eval_dump   = assert(rdebug.load(readfile 'backend.worker.eval.dump'))
 local compat_dump = assert(load(readfile 'backend.worker.eval.dump'))
 
 local function run_repl(frameId, expression)
@@ -100,8 +100,8 @@ function m.run(frameId, expression, context)
     return nil, ("unknown context `%s`"):format(context)
 end
 
-function m.eval(expression, level)
-    return rdebug.eval(eval_watch, expression, level or 0)
+function m.eval(expression, level, symbol)
+    return rdebug.eval(eval_watch, expression, level, symbol)
 end
 
 function m.verify(expression)

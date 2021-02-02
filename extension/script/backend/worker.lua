@@ -19,12 +19,13 @@ local info = {}
 local state = 'running'
 local stopReason = 'step'
 local exceptionFilters = {}
-local exceptionMsg = ''
-local exceptionTrace = ''
-local exceptionLevel = 0
+local currentException = {
+    message = '',
+    Trace = '',
+}
 local outputCapture = {}
 local noDebug = false
-local openUpdate = false
+local openUpdate = true
 local coroutineTree = {}
 local stackFrame = {}
 local skipFrame = 0
@@ -395,9 +396,9 @@ function CMD.exceptionInfo(pkg)
         command = pkg.command,
         seq = pkg.seq,
         breakMode = 'always',
-        exceptionId = exceptionMsg,
+        exceptionId = currentException.message,
         details = {
-            stackTrace = exceptionTrace,
+            stackTrace = currentException.trace,
         }
     }
 end
@@ -454,7 +455,7 @@ end
 
 function CMD.setSearchPath(pkg)
     local function set_search_path(name)
-        if not pkg[name] then
+        if not pkg[name] or pkg[name] == json.null then
             return
         end
         local value = pkg[name]
@@ -577,14 +578,6 @@ function event.newproto(proto, level)
     return breakpoint.newproto(proto, src, info.linedefined.."-"..info.lastlinedefined)
 end
 
-local function getEventArgs(i)
-    local name, value = rdebug.getlocal(1, -i)
-    if name == nil then
-        return
-    end
-    return rdebug.value(value)
-end
-
 local function pairsEventArgs()
     local max = rdebug.getstack()
     local n = 1
@@ -597,29 +590,13 @@ local function pairsEventArgs()
     end
 end
 
-local function getExceptionType()
-    local pcall = rdebug.value(rdebug.fieldv(rdebug._G, 'pcall'))
-    local xpcall = rdebug.value(rdebug.fieldv(rdebug._G, 'xpcall'))
-    local level = 1
-    while true do
-        local f = rdebug.getfunc(level)
-        if f == nil then
-            break
-        end
-        f = rdebug.value(f)
-        if f == pcall then
-            return 'pcall'
-        end
-        if f == xpcall then
-            return 'xpcall'
-        end
-        level = level + 1
-    end
-    return 'lua_pcall'
-end
-
 function event.update()
     workerThreadUpdate()
+end
+
+function event.enable_update(flag)
+    openUpdate = flag
+    hookmgr.update_open(not noDebug and openUpdate)
 end
 
 function event.print()
@@ -656,49 +633,60 @@ function event.iowrite()
     return true
 end
 
-local function execExceptionBreakpoint(type, level)
+local function execExceptionBreakpoint(type, level, error)
     local filter = exceptionFilters[type]
     if filter == true or filter == nil then
         return filter
     end
-    local ok, res = evaluate.eval(filter, level)
+    local ok, res = evaluate.eval(filter, level, { error = error })
     return (not ok) or res
 end
 
-function event.panic(msg)
-    if not initialized then return end
-    exceptionMsg, exceptionTrace, exceptionLevel = traceback(tostring(msg))
-    if not execExceptionBreakpoint('lua_panic', exceptionLevel) then
-        return
+local function getExceptionType()
+    local pcall = rdebug.value(rdebug.fieldv(rdebug._G, 'pcall'))
+    local xpcall = rdebug.value(rdebug.fieldv(rdebug._G, 'xpcall'))
+    local level = 1
+    while true do
+        local f = rdebug.getfunc(level)
+        if f == nil then
+            break
+        end
+        f = rdebug.value(f)
+        if f == pcall then
+            return 'pcall'
+        end
+        if f == xpcall then
+            return 'xpcall'
+        end
+        level = level + 1
     end
-    state = 'stopped'
-    runLoop('exception', exceptionMsg, exceptionLevel)
+    return 'lua_pcall'
 end
 
-function event.r_exception(msg)
-    if not initialized then return end
-    local type = getExceptionType()
-    exceptionMsg, exceptionTrace, exceptionLevel = traceback(tostring(msg))
-    if not execExceptionBreakpoint(type, exceptionLevel) then
+local function runException(type, error)
+    local message, trace, level = traceback(error)
+    if not execExceptionBreakpoint(type, level, error) then
         return
     end
+    currentException = {
+        message = message,
+        trace = trace,
+    }
     state = 'stopped'
-    runLoop('exception', exceptionMsg, exceptionLevel)
+    runLoop('exception', message, level)
 end
 
-function event.exception()
+function event.panic(error)
     if not initialized then return end
-    local type = getExceptionType()
-    local msg = getEventArgs(2)
-    exceptionMsg, exceptionTrace, exceptionLevel = traceback(msg)
-    if not execExceptionBreakpoint(type, exceptionLevel) then
-        return
-    end
-    state = 'stopped'
-    runLoop('exception', exceptionMsg, exceptionLevel)
+    runException('lua_panic', error)
 end
 
-function event.r_thread(co, type)
+function event.exception(error)
+    if not initialized then return end
+    runException(getExceptionType(), error)
+end
+
+function event.thread(co, type)
     local L = hookmgr.gethost()
     if co then
         if type == 0 then
@@ -708,12 +696,6 @@ function event.r_thread(co, type)
         end
     end
     hookmgr.updatehookmask(L)
-end
-
-function event.thread()
-    local co = getEventArgs(1)
-    local type = getEventArgs(2)
-    event.r_thread(co, type)
 end
 
 function event.wait()
@@ -775,12 +757,3 @@ end)
 sendToMaster {
     cmd = 'startThread',
 }
-
-local w = {}
-
-function w.openupdate()
-    openUpdate = true
-    hookmgr.update_open(true)
-end
-
-return w
