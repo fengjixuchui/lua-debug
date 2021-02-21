@@ -664,8 +664,8 @@ local function getExceptionType()
 end
 
 local function runException(type, error)
-    local message, trace, level = traceback(error)
-    if not execExceptionBreakpoint(type, level, error) then
+    local level, message, trace = traceback(error)
+    if level < 0 or not execExceptionBreakpoint(type, level, error) then
         return
     end
     currentException = {
@@ -757,3 +757,5 @@ end)
 sendToMaster {
     cmd = 'startThread',
 }
+
+hookmgr.update_open(true)
