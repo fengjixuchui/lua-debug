@@ -14,7 +14,7 @@ end
 local f = assert(debug.getinfo(level,"f").func, "can't find function")
 local args_name = {}
 local args_value = {}
-local locals = {}
+local updates = {}
 do
 	local i = 1
 	while true do
@@ -25,6 +25,7 @@ do
 		if #name > 0 then
 			args_name[#args_name+1] = name
 			args_value[name] = value
+			updates[#updates+1] = ("{'u',name=%q,idx=%d,val=%s}"):format(name, i, name)
 		end
 		i = i + 1
 	end
@@ -39,7 +40,7 @@ do
 		if name:byte() ~= 40 then	-- '('
 			args_name[#args_name+1] = name
 			args_value[name] = value
-			locals[#locals+1] = ("[%d]={%s},"):format(i,name)
+			updates[#updates+1] = ("{'l',name=%q,idx=%d,val=%s}"):format(name, i, name)
 		end
 		i = i + 1
 	end
@@ -53,12 +54,12 @@ return function(...)
 $SOURCE
 end,
 function()
-return {$LOCALS}
+return {$UPDATES}
 end
 ]]):gsub("%$(%w+)", {
 	ARGS = table.concat(args_name, ","),
 	SOURCE = source,
-	LOCALS = table.concat(locals),
+	UPDATES = table.concat(updates, ','),
 })
 else
 	full_source = ([[
@@ -66,15 +67,16 @@ return function(...)
 $SOURCE
 end,
 function()
-return {$LOCALS}
+return {$UPDATES}
 end
 ]]):gsub("%$(%w+)", {
 	SOURCE = source,
-	LOCALS = table.concat(locals),
+	UPDATES = table.concat(updates, ','),
 })
 end
 
 local func, update = assert(load(full_source, '=(EVAL)'))()
+local found = {}
 do
 	local i = 1
 	while true do
@@ -83,6 +85,7 @@ do
 			break
 		end
 		debug.setupvalue(func, i, args_value[name])
+		found[name] = true
 		i = i + 1
 	end
 end
@@ -106,7 +109,13 @@ do
 		rets = table.pack(func())
 	end
 end
-for k,v in pairs(update()) do
-	debug.setlocal(level,k,v[1])
+for _, info in ipairs(update()) do
+	if found[info.name] then
+		if info[1] == 'l' then
+			debug.setlocal(level, info.idx, info.val)
+		else
+			debug.setupvalue(f, info.idx, info.val)
+		end
+	end
 end
 return table.unpack(rets)

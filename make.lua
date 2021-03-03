@@ -1,9 +1,6 @@
 local lm = require "luamake"
 local platform = require "bee.platform"
 
-lm.gcc = 'clang'
-lm.gxx = 'clang++'
-
 if platform.OS == "Windows" then
     lm.defines = {
         "_WIN32_WINNT=0x0601",
@@ -78,7 +75,7 @@ lm:source_set 'runtime/onelua' {
 
 local runtimes = {}
 
-for _, luaver in ipairs {"lua51","lua52","lua53","lua54"} do
+for _, luaver in ipairs {"lua51","lua52","lua53","lua54","lua-latest"} do
     runtimes[#runtimes+1] = "runtime/"..luaver.."/lua"
     runtimes[#runtimes+1] = "runtime/"..luaver.."/remotedebug"
     if platform.OS == "Windows" then
@@ -111,6 +108,7 @@ for _, luaver in ipairs {"lua51","lua52","lua53","lua54"} do
             },
             sources = {
                 "lua.c",
+                "../../../make/lua-debug.rc",
             },
             defines = {
                 luaver == "lua51" and "_CRT_SECURE_NO_WARNINGS",
@@ -141,14 +139,20 @@ for _, luaver in ipairs {"lua51","lua52","lua53","lua54"} do
             links = {
                 "m",
                 "dl",
-                luaver ~= "lua54" and "readline"
+                platform.OS == "Linux" and "pthread",
+                (luaver == "lua51" or luaver == "lua52" or luaver == "lua53") and "readline"
             }
         }
     end
 
     lm.rootdir = ''
 
-    local lua_version_num = 100 * math.tointeger(luaver:sub(4,4)) + math.tointeger(luaver:sub(5,5))
+    local lua_version_num
+    if luaver == "lua-latest" then
+        lua_version_num = 504
+    else
+        lua_version_num = 100 * math.tointeger(luaver:sub(4,4)) + math.tointeger(luaver:sub(5,5))
+    end
 
     lm:shared_library ('runtime/'..luaver..'/remotedebug') {
         deps = {
@@ -177,14 +181,13 @@ for _, luaver in ipairs {"lua51","lua52","lua53","lua54"} do
             platform.OS == "Windows" and "3rd/bee.lua/bee/utility/module_version_win.cpp",
             platform.OS == "Windows" and "3rd/bee.lua/bee/utility/unicode_win.cpp",
         },
+        crt = platform.OS == "Linux" and "static" or "dynamic",
         links = {
             platform.OS == "Windows" and "version",
             platform.OS == "Windows" and "ws2_32",
             platform.OS == "Windows" and "user32",
             platform.OS == "Windows" and "delayimp",
-            platform.OS == "Linux" and "stdc++",
             platform.OS == "Linux" and "pthread",
-            platform.OS == "Linux" and "stdc++fs",
         },
         ldflags = {
             platform.OS == "Windows" and ("/DELAYLOAD:%s.dll"):format(luaver),
@@ -202,7 +205,9 @@ lm:build 'update_version' {
 }
 
 lm.rootdir = ''
-lm:import '3rd/bee.lua/make.lua'
+lm:import("3rd/bee.lua/make.lua", {
+    EXE_RESOURCE = "../../make/lua-debug.rc"
+})
 
 if platform.OS == "Windows" and lm.arch == "x64" then
     lm:build 'install' {
@@ -225,6 +230,7 @@ else
             },
             includes = {
                 "3rd/bee.lua",
+                "3rd/bee.lua/3rd/lua",
                 lm.arch == "x86" and "3rd/wow64ext/src",
             },
             sources = {
