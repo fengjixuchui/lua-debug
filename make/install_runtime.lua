@@ -1,40 +1,50 @@
-local platform, arch, mode = ...
+local bindir, arch = ...
 local fs = require 'bee.filesystem'
 local CWD = fs.current_path()
 
-local exe = platform == 'msvc' and ".exe" or ""
-local dll = platform == 'msvc' and ".dll" or ".so"
+local OS = require 'bee.platform'.OS:lower()
 
-if platform ~= 'msvc' or arch == 'x86' then
-    local binplat = platform ~= 'msvc' and platform or 'win'
-    local output = CWD / 'publish' / 'bin' / binplat
-    local bindir = CWD / 'build' / platform / 'bin' / arch / mode
+local exe = OS == 'windows' and ".exe" or ""
+local dll = OS == 'windows' and ".dll" or ".so"
+
+local ArchAlias = {
+    x86_64 = "x64",
+    x86 = "x86",
+}
+
+do
+    --copy lua-debug
+    local input = fs.path(bindir)
+    local output = CWD / 'publish' / 'bin' / OS
     fs.create_directories(output)
-    fs.copy_file(bindir / ('bee'..dll),       output / ('bee'..dll),        true)
-    fs.copy_file(bindir / ('lua'..exe),       output / ('lua-debug'..exe),  true)
-    fs.copy_file(bindir / ('inject'..dll),    output / ('inject'..dll),     true)
-    if platform == 'msvc' then
-        fs.copy_file(bindir / 'lua54.dll',    output / 'lua54.dll',         true)
-        require 'msvc'.copy_crtdll(arch, output)
+    if (OS == 'windows' and arch == 'x86') or (OS ~= 'windows' and arch == 'x86_64') then
+        fs.create_directories(output)
+        fs.copy_file(input / ('bee'..dll),       output / ('bee'..dll),        true)
+        fs.copy_file(input / ('lua'..exe),       output / ('lua-debug'..exe),  true)
+        if OS == 'windows' then
+            fs.copy_file(input / 'inject.dll',  output / 'inject.dll', true)
+            fs.copy_file(input / 'lua54.dll',   output / 'lua54.dll',  true)
+        end
+    end
+    if OS == 'windows' then
+        fs.copy_file(input / 'launcher.dll', output / ('launcher.'..ArchAlias[arch]..'.dll'), true)
     end
 end
 
-if platform == 'msvc' then
-    local output = CWD / 'publish' / 'bin' / 'win'
-    local bindir = CWD / 'build' / platform / 'bin' / arch / mode
-    fs.create_directories(output)
-    fs.copy_file(bindir / 'launcher.dll', output / ('launcher.'..arch..'.dll'), true)
+do
+    --copy runtime
+    for _, luaver in ipairs {"lua51","lua52","lua53","lua54","lua-latest"} do
+        local input = fs.path(bindir) / 'runtime' / luaver
+        local output = CWD / 'publish' / 'runtime' / OS / arch / luaver
+        fs.create_directories(output)
+        fs.copy_file(input / ('lua'..exe),         output / ('lua'..exe),         true)
+        fs.copy_file(input / ('remotedebug'..dll), output / ('remotedebug'..dll), true)
+        if OS == 'windows' then
+            fs.copy_file(input / (luaver..'.dll'), output / (luaver..'.dll'), true)
+        end
+    end
 end
 
-for _, luaver in ipairs {"lua51","lua52","lua53","lua54","lua-latest"} do
-    local rtplat = platform ~= 'msvc' and platform or (arch == 'x86' and 'win32' or 'win64')
-    local bindir = CWD / 'build' / platform / 'bin' / arch / mode / 'runtime' / luaver
-    local output = CWD / 'publish' / 'runtime' / rtplat / luaver
-    fs.create_directories(output)
-    fs.copy_file(bindir / ('lua'..exe),         output / ('lua'..exe),         true)
-    fs.copy_file(bindir / ('remotedebug'..dll), output / ('remotedebug'..dll), true)
-    if platform == 'msvc' then
-        fs.copy_file(bindir / (luaver..'.dll'), output / (luaver..'.dll'), true)
-        require 'msvc'.copy_crtdll(arch, output)
-    end
+if OS == 'windows' then
+    require 'msvc'.copy_vcrt(ArchAlias[arch], CWD / 'publish' / 'vcredist' / arch)
 end

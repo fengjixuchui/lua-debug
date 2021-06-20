@@ -1,3 +1,5 @@
+local root = ...
+
 if debug.getregistry()["lua-debug"] then
     local dbg = debug.getregistry()["lua-debug"]
     local empty = {root = dbg.root}
@@ -19,57 +21,51 @@ if debug.getregistry()["lua-debug"] then
     return empty
 end
 
-local dbg = {}
-
-function dbg:init(cfg)
-    local platform = (function()
+local function detectLuaDebugPath(cfg)
+    local OS
+    local ARCH
+    do
+        local function shell(command)
+            --NOTICE: io.popen可能会多线程不安全
+            local f = assert(io.popen(command, 'r'))
+            local r = f:read '*l'
+            f:close()
+            return r:lower()
+        end
+        local function detect_windows()
+            OS = "windows"
+            if os.getenv "PROCESSOR_ARCHITECTURE" == "AMD64" then
+                ARCH = "x86_64"
+            else
+                ARCH = "x86"
+            end
+        end
+        local function detect_linux()
+            OS = "linux"
+            ARCH = "x86_64"
+            local machine = shell "uname -m"
+            assert(machine:match "x86_64" or machine:match "amd64", "unknown ARCH")
+        end
+        local function detect_macos()
+            OS = "macos"
+            ARCH = shell "uname -m"
+            assert(ARCH == "x86_64" or ARCH == "arm64", "unknown ARCH")
+        end
         if package.config:sub(1,1) == "\\" then
-            return "windows"
-        end
-        local name = io.popen('uname -s','r'):read('*l')
-        if name == "Linux" then
-            return "linux"
-        elseif name == "Darwin" then
-            return "macos"
-        end
-        error "unknown platform"
-    end)()
-
-    local arch = (function()
-        if string.packsize then
-            local size = string.packsize "T"
-            if size == 8 then
-                return 64
-            end
-            if size == 4 then
-                return 32
-            end
+            detect_windows()
         else
-            if platform ~= "windows" then
-                return 64
-            end
-            local pointer = tostring(io.stderr):match "%((.*)%)"
-            if pointer then
-                if #pointer <= 10 then
-                    return 32
-                end
-                return 64
+            local name = shell 'uname -s'
+            if name == "linux" then
+                detect_linux()
+            elseif name == "darwin" then
+                detect_macos()
+            else
+                error "unknown OS"
             end
         end
-        assert(false, "unknown arch")
-    end)()
-
-    local rt = "/runtime"
-    if platform == "windows" then
-        if arch == 64 then
-            rt = rt .. "/win64"
-        else
-            rt = rt .. "/win32"
-        end
-    else
-        assert(arch == 64)
-        rt = rt .. "/" .. platform
     end
+
+    local rt = "/runtime/" .. OS .. "/" .. ARCH
     if cfg.latest then
         rt = rt .. "/lua-latest"
     elseif _VERSION == "Lua 5.4" then
@@ -84,46 +80,84 @@ function dbg:init(cfg)
         error(_VERSION .. " is not supported.")
     end
 
-    local ext = platform == "windows" and "dll" or "so"
-    local remotedebug = cfg.root..rt..'/remotedebug.'..ext
-    if cfg.luaapi then
+    local ext = OS == "windows" and "dll" or "so"
+    return root..rt..'/remotedebug.'..ext
+end
+
+local function initDebugger(dbg, cfg)
+    if type(cfg) == "string" then
+        cfg = {address = cfg}
+    end
+
+    local remotedebug = os.getenv "LUA_DEBUG_PATH"
+    local updateenv = false
+    if not remotedebug then
+        remotedebug = detectLuaDebugPath(cfg)
+        updateenv = true
+    end
+    local isWindows = package.config:sub(1,1) == "\\"
+    if isWindows then
         assert(package.loadlib(remotedebug,'init'))(cfg.luaapi)
     end
 
     ---@type RemoteDebug
-    self.rdebug = assert(package.loadlib(remotedebug,'luaopen_remotedebug'))()
+    dbg.rdebug = assert(package.loadlib(remotedebug,'luaopen_remotedebug'))()
+    if updateenv then
+        dbg.rdebug.setenv("LUA_DEBUG_PATH",remotedebug)
+    end
 
     local function utf8(s)
-        if cfg.ansi and platform == "windows" then
-            return self.rdebug.a2u(s)
+        if cfg.ansi and isWindows then
+            return dbg.rdebug.a2u(s)
         end
         return s
     end
-    self.root = utf8(cfg.root)
-    self.utf8 = utf8
-    self.path  = self.root..'/script/?.lua'
-    self.cpath = self.root..rt..'/?.'..ext
+    dbg.root = utf8(root)
+    dbg.address = cfg.address and utf8(cfg.address) or nil
 end
 
-function dbg:start(addr, client)
-    local address = ("%q, %s"):format(self.utf8(addr), client == true and "true" or "false")
+local dbg = {}
+
+function dbg:start(cfg)
+    initDebugger(self, cfg)
+
     local bootstrap_lua = ([[
         package.path = %q
-        package.cpath = %q
         require "remotedebug.thread".bootstrap_lua = debug.getinfo(1, "S").source
     ]]):format(
-          self.path
-        , self.cpath
+          self.root..'/script/?.lua'
     )
     self.rdebug.start(("assert(load(%q))(...)"):format(bootstrap_lua) .. ([[
         local logpath = %q
         local log = require 'common.log'
         log.file = logpath..'/worker.log'
-        require 'backend.master' (logpath, %q, true)
+        require 'backend.master' .init(logpath, %q, true)
         require 'backend.worker'
     ]]):format(
           self.root
-        , address
+        , ("%q, %s"):format(dbg.address, cfg.client == true and "true" or "false")
+    ))
+    return self
+end
+
+function dbg:attach(cfg)
+    initDebugger(self, cfg)
+
+    local bootstrap_lua = ([[
+        package.path = %q
+        require "remotedebug.thread".bootstrap_lua = debug.getinfo(1, "S").source
+    ]]):format(
+          self.root..'/script/?.lua'
+    )
+    self.rdebug.start(("assert(load(%q))(...)"):format(bootstrap_lua) .. ([[
+        if require 'backend.master' .has() then
+            local logpath = %q
+            local log = require 'common.log'
+            log.file = logpath..'/worker.log'
+            require 'backend.worker'
+        end
+    ]]):format(
+        self.root
     ))
     return self
 end

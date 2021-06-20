@@ -30,7 +30,7 @@
 #include "lvm.h"
 #include "lzio.h"
 
-#include "luai_userstate.h"
+#include "luai_devent.h"
 
 
 
@@ -93,6 +93,9 @@ static void resetstack (lua_State *L, int status) {
 
 
 void luaD_throw (lua_State *L, int errcode) {
+  if (errcode != LUA_ERRRUN) {
+    luai_errevent(L, errcode);
+  }
   if (L->errorJmp) {
     L->errorJmp->status = errcode;
     LUAI_THROW(L, L->errorJmp);

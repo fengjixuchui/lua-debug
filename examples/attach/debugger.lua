@@ -1,7 +1,12 @@
+local INSIDERS = false
+
 local function searchDebugger(luaDebugs, tag)
+    if INSIDERS then
+        tag = tag .. "-insiders"
+    end
     local isWindows = package.config:sub(1,1) == "\\"
     local extensionPath = (isWindows and os.getenv "USERPROFILE" or os.getenv "HOME") .. "/.vscode"..tag.."/extensions"
-    local command = isWindows and ("dir /B " .. extensionPath:gsub("/", "\\") .. " 2>nul") or ("ls -1 " .. extensionPath)
+    local command = isWindows and ("dir /B " .. extensionPath:gsub("/", "\\") .. " 2>nul") or ("ls -1 " .. extensionPath .. " 2>/dev/null")
     for name in io.popen(command):lines() do
         local a, b, c = name:match "^actboy168%.lua%-debug%-(%d+)%.(%d+)%.(%d+)$"
         if a then
@@ -26,8 +31,7 @@ local function dofile(filename, ...)
     local f = assert(io.open(filename))
     local str = f:read "*a"
     f:close()
-    local func = assert(load(str, "=(BOOTSTRAP)"))
-    return func(...)
+    return assert(load(str, "=(debugger.lua)"))(...)
 end
 
 local path = getLatestDebugger()

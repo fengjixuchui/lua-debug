@@ -5,6 +5,7 @@ local evaluate = require 'backend.worker.evaluate'
 local ev = require 'backend.event'
 local hookmgr = require 'remotedebug.hookmgr'
 local parser = require 'backend.worker.parser'
+local stdout = require 'backend.worker.stdout'
 
 local currentactive = {}
 local waitverify = {}
@@ -75,14 +76,30 @@ local function bpClientKey(src)
     return fs.path_native(fs.path_normalize(src.path))
 end
 
+local function NormalizeErrorMessage(what, err)
+    return ("%s: %s."):format(what, err:gsub("^:%d+: %(EVAL%):%d+: (.*)$", "%1"))
+end
+
 local function valid(bp)
     if bp.condition then
-        if not evaluate.verify(bp.condition) then
+        local ok, err = evaluate.verify(bp.condition)
+        if not ok then
+            ev.emit('breakpoint', 'changed', {
+                id = bp.id,
+                message = NormalizeErrorMessage("Condition Error", err),
+                verified = false,
+            })
             return false
         end
     end
     if bp.hitCondition then
-        if not evaluate.verify('0 ' .. bp.hitCondition) then
+        local ok, err = evaluate.verify('0 ' .. bp.hitCondition)
+        if not ok then
+            ev.emit('breakpoint', 'changed', {
+                id = bp.id,
+                message = NormalizeErrorMessage("HitCondition Error", err),
+                verified = false,
+            })
             return false
         end
     end
@@ -106,6 +123,11 @@ local function verifyBreakpoint(src, breakpoints)
         end
         local activeline = lineinfo[bp.line]
         if not activeline then
+            ev.emit('breakpoint', 'changed', {
+                id = bp.id,
+                message = "The breakpoint didn't hit a valid line.",
+                verified = false,
+            })
             goto continue
         end
         bp.source = src
@@ -127,7 +149,6 @@ local function verifyBreakpoint(src, breakpoints)
         ev.emit('breakpoint', 'changed', {
             id = bp.id,
             line = bp.line,
-            message = bp.message,
             verified = true,
         })
         ::continue::
@@ -226,12 +247,7 @@ function m.exec(bp)
             return tostring(res)
         end)
         rdebug.getinfo(1, "Sl", info)
-        local src = source.create(info.source)
-        if source.valid(src) then
-            ev.emit('output', 'stdout', res, src, source.line(src, info.currentline))
-        else
-            ev.emit('output', 'stdout', res)
-        end
+        stdout(res, info)
         return false
     end
     return true
@@ -263,19 +279,94 @@ local funcs = {}
 function m.set_funcbp(breakpoints)
     funcs = {}
     for _, bp in ipairs(breakpoints) do
-        if evaluate.verify(bp.name) and valid(bp) then
-            funcs[#funcs+1] = bp
+        local ok, err = evaluate.verify(bp.name)
+        if not ok then
+            ev.emit('breakpoint', 'changed', {
+                id = bp.id,
+                message = NormalizeErrorMessage("Error", err),
+                verified = false,
+            })
+            goto continue
         end
+        if not valid(bp) then
+            goto continue
+        end
+        funcs[#funcs+1] = bp
+        bp.verified = true
+        bp.statHit = 0
+        ev.emit('breakpoint', 'changed', bp)
+        ::continue::
     end
     hookmgr.funcbp_open(#funcs > 0)
+end
+
+function m.hit_bp(src, currentline)
+    local bp = m.find(src, currentline)
+    if bp and m.exec(bp) then
+        return bp
+    end
 end
 
 function m.hit_funcbp(func)
     for _, bp in ipairs(funcs) do
         local ok, res = evaluate.eval(bp.name, 1)
-        if ok and res == func then
-            return m.exec(bp)
+        if ok and res == func and m.exec(bp) then
+            return bp
         end
+    end
+end
+
+local exceptionFilters = {}
+
+function m.hitExceptionBreakpoint(flags, level, error)
+    for _, flag in ipairs(flags) do
+        local bp = exceptionFilters[flag]
+        if bp then
+            if not bp.condition then
+                return bp
+            end
+            local ok, res = evaluate.eval(bp.condition, level, { error = error })
+            if ok and res then
+                return bp
+            end
+        end
+    end
+end
+
+function m.setExceptionBreakpoints(breakpoints)
+    exceptionFilters = {}
+    for _, filter in ipairs(breakpoints) do
+        if not filter.condition then
+            exceptionFilters[filter.filterId] = {
+                id = filter.id,
+            }
+            ev.emit('breakpoint', 'changed', {
+                id = filter.id,
+                verified = true,
+            })
+            goto continue
+        end
+        local ok, err = evaluate.verify(filter.condition)
+        if not ok then
+            ev.emit('breakpoint', 'changed', {
+                id = filter.id,
+                message = NormalizeErrorMessage("Error", err),
+                verified = false,
+            })
+            goto continue
+        end
+        exceptionFilters[filter.filterId] = {
+            id = filter.id,
+            condition = filter.condition,
+        }
+        ev.emit('breakpoint', 'changed', {
+            id = filter.id,
+            verified = true,
+        })
+        ::continue::
+    end
+    if hookmgr.exception_open then
+        hookmgr.exception_open(next(exceptionFilters) ~= nil)
     end
 end
 
@@ -283,7 +374,6 @@ ev.on('terminated', function()
     currentactive = {}
     waitverify = {}
     info = {}
-    m = {}
     enable = false
     hookmgr.break_open(false)
 end)

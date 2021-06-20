@@ -1,7 +1,6 @@
 local fs = require 'bee.filesystem'
 local sp = require 'bee.subprocess'
-local platformOS = require 'frontend.platformOS'
-local inject = require 'inject'
+local platform_os = require 'frontend.platform_os'
 
 local useWSL = false
 local useUtf8 = false
@@ -35,37 +34,45 @@ local function getLuaVersion(args)
     return "lua54"
 end
 
-local function supportSimpleLaunch(args)
-    if platformOS() ~= "Windows" then
-        return false
-    end
-    if args.luaVersion == "5.1" or args.luaVersion == "5.2" then
-        return false
-    end
-    return true
-end
-
 local function Is64BitWindows()
     -- https://docs.microsoft.com/en-us/archive/blogs/david.wang/howto-detect-process-bitness
     return os.getenv "PROCESSOR_ARCHITECTURE" == "AMD64" or os.getenv "PROCESSOR_ARCHITEW6432" == "AMD64"
 end
 
+local function IsArm64Macos()
+    local f <close> = assert(io.popen("uname -v", "r"))
+    if f:read "l":match "RELEASE_ARM64" then
+        return true
+    end
+end
+
 local function getLuaExe(args, dbg)
-    if type(args.luaexe) == "string" then
-        return fs.path(args.luaexe)
-    end
-    local runtime = 'runtime'
-    if platformOS() == "Windows" then
-        if args.luaArch == "x86_64" and Is64BitWindows() then
-            runtime = runtime .. "/win64"
-        else
-            runtime = runtime .. "/win32"
+    local OS = platform_os():lower()
+    local ARCH = args.luaArch
+    if OS == "windows" then
+        if ARCH == "x86_64" and not Is64BitWindows() then
+            ARCH = "x86"
         end
-    else
-        runtime = runtime .. "/" .. platformOS():lower()
+    elseif OS == "linux" then
+        ARCH = "x86_64"
+    elseif OS == "macos" then
+        if IsArm64Macos() then
+            if ARCH == "x86" then
+                ARCH = "x86_64"
+            end
+        else
+            ARCH = "x86_64"
+        end
     end
-    runtime = runtime .. "/" .. getLuaVersion(args)
-    return dbg / runtime / (platformOS() == "Windows" and "lua.exe" or "lua")
+    local luaexe = dbg / "runtime"
+        / OS
+        / ARCH
+        / getLuaVersion(args)
+        / (OS == "windows" and "lua.exe" or "lua")
+    if fs.exists(luaexe) then
+        return luaexe
+    end
+    return nil, ("No runtime (OS: %s, ARCH: %s) is found, you need to compile it yourself."):format(OS, ARCH)
 end
 
 local function installBootstrap1(option, luaexe, args)
@@ -92,18 +99,6 @@ local function installBootstrap2(c, luaexe, args, pid, dbg)
     )
 end
 
-local function installBootstrap2Simple(c, luaexe, args, pid)
-    c[#c+1] = towsl(luaexe:string())
-    c[#c+1] = "-ldbg"
-    c[#c+1] = "-e"
-    local params = {}
-    params[#params+1] = pid
-    if args.luaVersion == "latest" then
-        params[#params+1] = '[[latest]]'
-    end
-    c[#c+1] = ("DBG{%s}"):format(table.concat(params, ","))
-end
-
 local function installBootstrap3(c, args)
     if type(args.arg0) == "string" then
         c[#c+1] = args.arg0
@@ -128,59 +123,48 @@ local function installBootstrap3(c, args)
     end
 end
 
-local function exists_exe(luaexe, modify)
-    if fs.exists(luaexe) then
-        return true
+local function checkLuaExe(args, dbg)
+    if type(args.luaexe) == "string" then
+        local luaexe = fs.path(args.luaexe)
+        if fs.exists(luaexe) then
+            return luaexe
+        end
+        if platform_os() == "Windows" and luaexe:equal_extension "" then
+            luaexe = fs.path(luaexe):replace_extension "exe"
+            if fs.exists(luaexe) then
+                return luaexe
+            end
+        end
+        return nil, ("No file `%s`."):format(args.luaexe)
     end
-    if platformOS() ~= "Windows" then
-        return false
-    end
-    if not luaexe:equal_extension "" then
-        return false
-    end
-    if modify then
-        luaexe:replace_extension "exe"
-    else
-        luaexe = fs.path(luaexe):replace_extension "exe"
-    end
-    return fs.exists(luaexe)
+    return getLuaExe(args, dbg)
 end
 
 local function create_luaexe_in_terminal(args, dbg, pid)
     initialize(args)
-    local luaexe = getLuaExe(args, dbg)
-    if not exists_exe(luaexe, false) then
-        if args.luaexe then
-            return nil, ("No file `%s`."):format(args.luaexe)
-        end
-        return nil, "Non-Windows need to compile lua-debug first."
+    local luaexe, err = checkLuaExe(args, dbg)
+    if not luaexe then
+        return nil, err
     end
     local option = {
         kind = (args.console == "integratedTerminal") and "integrated" or "external",
-        title = "Lua Debug",
+        title = args.name,
         args = {},
     }
     if useWSL then
         option.args[1] = "wsl"
     end
     installBootstrap1(option, luaexe, args)
-    if type(args.luaexe) ~= "string" and supportSimpleLaunch(args) then
-        installBootstrap2Simple(option.args, luaexe, args, pid)
-    else
-        installBootstrap2(option.args, luaexe, args, pid, dbg)
-    end
+    installBootstrap2(option.args, luaexe, args, pid, dbg)
     installBootstrap3(option.args, args)
     return option
 end
 
 local function create_luaexe_in_console(args, dbg, pid)
     initialize(args)
-    local luaexe = getLuaExe(args, dbg)
-    if not exists_exe(luaexe, true) then
-        if args.luaexe then
-            return nil, ("No file `%s`."):format(args.luaexe)
-        end
-        return nil, "Non-Windows need to compile lua-debug first."
+    local luaexe, err = checkLuaExe(args, dbg)
+    if not luaexe then
+        return nil, err
     end
     local option = {
         console = 'hide'
@@ -195,7 +179,7 @@ local function create_luaexe_in_console(args, dbg, pid)
     return sp.spawn(option)
 end
 
-local function create_process_in_console(args)
+local function create_process_in_console(args, callback)
     initialize(args)
     local application = args.runtimeExecutable
     local option = {
@@ -219,11 +203,15 @@ local function create_process_in_console(args)
     if not process then
         return nil, err
     end
+    local inject = require 'inject'
     inject.injectdll(process
-        , (WORKDIR / "bin" / "win" / "launcher.x86.dll"):string()
-        , (WORKDIR / "bin" / "win" / "launcher.x64.dll"):string()
+        , (WORKDIR / "bin" / "windows" / "launcher.x86.dll"):string()
+        , (WORKDIR / "bin" / "windows" / "launcher.x64.dll"):string()
         , "launch"
     )
+    if callback then
+        callback(process)
+    end
     process:resume()
     return process
 end

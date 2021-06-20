@@ -7,7 +7,7 @@ local utility = require 'remotedebug.utility'
 local request = {}
 
 local firstWorker = true
-local terminateTimestamp
+local closeProcess = false
 local state = 'none'
 local config = {
     initialize = {},
@@ -35,7 +35,6 @@ end
 
 function request.initialize(req)
     firstWorker = true
-    terminateTimestamp = nil
     mgr.setClient(req.arguments)
     response.initialize(req)
     event.initialized()
@@ -159,20 +158,21 @@ end
 
 function request.setBreakpoints(req)
     local args = req.arguments
-    local content = skipBOM(args.sourceContent)
+    local invalidPath = args.source.path and not isValidPath(args.source.path)
     for _, bp in ipairs(args.breakpoints) do
         bp.id = genBreakpointID()
         bp.verified = false
+        bp.message = invalidPath
+                    and ("Does not support path: `%s`"):format(args.source.path)
+                    or "Wait verify. (The source file is not loaded.)"
     end
     response.success(req, {
         breakpoints = args.breakpoints
     })
-    -- 因为VSCode奇葩处理方式，所以无论如何都必须返回success，让它高兴。
-    -- https://github.com/microsoft/vscode/issues/85279
-    if args.source.path and not isValidPath(args.source.path) then
-        --response.error(req, ("Does not support path: `%s`"):format(args.source.path))
+    if invalidPath then
         return
     end
+    local content = skipBOM(args.sourceContent)
     if args.source.sourceReference then
         local sourceReference = args.source.sourceReference
         local w = sourceReference >> 32
@@ -202,8 +202,13 @@ end
 
 function request.setFunctionBreakpoints(req)
     local args = req.arguments
+    for _, bp in ipairs(args.breakpoints) do
+        bp.id = genBreakpointID()
+        bp.verified = false
+        bp.message = "Wait verify."
+    end
     response.success(req, {
-        breakpoints = {}
+        breakpoints = args.breakpoints
     })
     config.function_breakpoints = args.breakpoints
     if state == "initialized" then
@@ -216,12 +221,39 @@ end
 
 function request.setExceptionBreakpoints(req)
     local args = req.arguments
-    response.success(req)
-    config.exception_breakpoints = args
+    local breakpoints = {}
+    local filter = {}
+    local function addExceptionBreakpoint(opt)
+        local id = genBreakpointID()
+        breakpoints[#breakpoints+1] = {
+            id = id,
+            verified = false,
+            message = "Wait verify."
+        }
+        filter[#filter+1] = {
+            id = id,
+            filterId = opt.filterId,
+            condition = opt.condition,
+        }
+    end
+    for _, filterId in ipairs(args.filters) do
+        addExceptionBreakpoint {
+            filterId = filterId
+        }
+    end
+    if args.filterOptions then
+        for _, opt in ipairs(args.filterOptions) do
+            addExceptionBreakpoint(opt)
+        end
+    end
+    response.success(req, {
+        breakpoints = breakpoints,
+    })
+    config.exception_breakpoints = filter
     if state == "initialized" then
         mgr.broadcastToWorker {
             cmd = 'setExceptionBreakpoints',
-            arguments = args,
+            arguments = filter,
         }
     end
 end
@@ -306,37 +338,74 @@ function request.evaluate(req)
 end
 
 function request.threads(req)
-    local t = {}
-    for w in pairs(mgr.workers()) do
-        t[#t + 1] = w
-    end
-    response.threads(req, t)
+    response.threads(req, mgr.threads())
 end
 
 function request.disconnect(req)
-    return request.terminate(req)
+    response.success(req)
+    local args = req.arguments
+    if args.terminateDebuggee == nil then
+        args.terminateDebuggee = not not config.launch
+    end
+    mgr.broadcastToWorker {
+        cmd = 'disconnect',
+    }
+    if args.terminateDebuggee then
+        if closeProcess then
+            mgr.setTerminateDebuggeeCallback(function()
+                os.exit(true, true)
+            end)
+        else
+            os.exit(true, true)
+        end
+    end
+    return true
 end
 
 function request.terminate(req)
     response.success(req)
-    if config.initialize.termOnExit then
-        mgr.broadcastToWorker {
-            cmd = 'exit',
-        }
-        if not terminateTimestamp then
-            terminateTimestamp = os.clock()
-            utility.closeprocess()
-        else
-            if terminateTimestamp - os.clock() > 2 then
-                os.exit(true, true)
-            end
-        end
-    else
-        mgr.broadcastToWorker {
-            cmd = 'terminated',
-        }
+    if utility.closewindow() then
+        return
     end
+    --TODO:
+    --  现在调试器激活是会屏蔽SIGINT，导致closeprocess无法生效，所以需要先将调试器关闭，再调用closeprocess。
+    --  或许需要让调试器和SIGINT不再冲突。
+    --
+    mgr.broadcastToWorker {
+        cmd = 'disconnect',
+    }
+    mgr.setTerminateDebuggeeCallback(function()
+        closeProcess = true
+        utility.closeprocess()
+    end)
     return true
+end
+
+function request.restart(req)
+    local args = req.arguments.arguments
+    response.success(req)
+    mgr.broadcastToWorker {
+        cmd = 'disconnect',
+    }
+    mgr.setTerminateDebuggeeCallback(function()
+        if args then
+            config.initialize = args
+        end
+        for w in pairs(mgr.workers()) do
+            initializeWorker(w)
+        end
+        mgr.initConfig(config)
+    end)
+end
+
+function request.terminateThreads(req)
+    local args = req.arguments
+    response.success(req)
+    for _, w in ipairs(args.threadIds) do
+        mgr.sendToWorker(w, {
+            cmd = 'disconnect',
+        })
+    end
 end
 
 function request.pause(req)
@@ -490,7 +559,10 @@ end
 --    for i = 1, n do
 --        t[i] = tostring(select(i, ...))
 --    end
---    event.output('stdout', table.concat(t, '\t')..'\n')
+--    event.output {
+--        category = 'stdout',
+--        output = table.concat(t, '\t')..'\n',
+--    }
 --end
 
 --local log = require 'common.log'

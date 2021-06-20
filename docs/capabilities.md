@@ -20,11 +20,12 @@
 | supportsExceptionOptions           |    🟥    |
 | supportsValueFormattingOptions     |    🟥    |
 | supportsExceptionInfoRequest       |    🟩    |
-| supportTerminateDebuggee           |    🟥    |
+| supportTerminateDebuggee           |    🟩    |
+| supportSuspendDebuggee             |    🟥    |
 | supportsDelayedStackTraceLoading   |    🟩    |
 | supportsLoadedSourcesRequest       |    🟩    |
 | supportsLogPoints                  |    🟩    |
-| supportsTerminateThreadsRequest    |    🟨    |
+| supportsTerminateThreadsRequest    |    🟩    |
 | supportsSetExpression              |    🟥    |
 | supportsTerminateRequest           |    🟩    |
 | supportsDataBreakpoints            |    🟨    |

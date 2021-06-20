@@ -21,7 +21,7 @@ do
 		if name == nil then
 			break
 		end
-		if #name > 0 then
+		if #name > 0 and name ~= "_ENV" then
 			args_name[#args_name+1] = name
 			args_value[name] = value
 		end
@@ -76,7 +76,9 @@ do
 		if name == nil then
 			break
 		end
-		debug.setupvalue(func, i, args_value[name])
+		if name ~= "_ENV" then
+			debug.setupvalue(func, i, args_value[name])
+		end
 		i = i + 1
 	end
 end

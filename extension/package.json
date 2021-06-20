@@ -1,7 +1,7 @@
 {
     "name": "lua-debug",
     "displayName": "Lua Debug",
-    "version": "1.32.0",
+    "version": "1.39.0",
     "publisher": "actboy168",
     "icon": "images/logo.png",
     "description": "Visual Studio Code debugger extension for Lua",
@@ -39,6 +39,12 @@
         "onDebugDynamicConfigurations",
         "onDebugResolve:lua"
     ],
+    "capabilities": {
+        "untrustedWorkspaces": {
+            "supported": false,
+            "description" : "Debugging is disabled in Restricted Mode."
+        }
+    },
     "contributes": {
         "breakpoints": [
             {
@@ -83,7 +89,7 @@
             {
                 "command": "extension.lua-debug.debugEditorContents",
                 "title": "Debug File",
-                "icon": "$(debug-alt)"
+                "icon": "$(debug-alt-small)"
             },
             {
                 "command": "extension.lua-debug.showIntegerAsDec",
@@ -194,11 +200,6 @@
                             "stopOnThreadEntry": {
                                 "type": "boolean",
                                 "markdownDescription": "Automatically stop after thread entry.",
-                                "default": true
-                            },
-                            "termOnExit": {
-                                "type": "boolean",
-                                "markdownDescription": "Automatically terminate process after exit.",
                                 "default": true
                             },
                             "luaVersion": {
@@ -382,11 +383,6 @@
                                 "markdownDescription": "Automatically stop after thread entry.",
                                 "default": true
                             },
-                            "termOnExit": {
-                                "type": "boolean",
-                                "markdownDescription": "Automatically terminate process after exit.",
-                                "default": false
-                            },
                             "address": {
                                 "type": "string",
                                 "markdownDescription": "Debugger address.\n  1. IPv4 e.g. `127.0.0.1:4278`\n  2. IPv6 e.g. `[::1]:4278`\n  3. Unix domain socket e.g. `@c:\\unix.sock`",
@@ -542,7 +538,8 @@
                     "default": "x86_64",
                     "enum": [
                         "x86",
-                        "x86_64"
+                        "x86_64",
+                        "arm64"
                     ]
                 },
                 "lua.debug.settings.consoleCoding": {
@@ -563,6 +560,22 @@
                         "utf8",
                         "ansi"
                     ]
+                },
+                "lua.debug.settings.path": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "description": "%lua.debug.launch.path.description%",
+                    "default": []
+                },
+                "lua.debug.settings.cpath": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    },
+                    "description": "%lua.debug.launch.cpath.description%",
+                    "default": []
                 }
             }
         }

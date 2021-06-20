@@ -6,22 +6,22 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-16.04, macos-latest]
-        arch: [x86, x64]
-        exclude:
+        include:
+        - os: windows-latest
+          arch: x86
+        - os: windows-latest
+          arch: x86_64
         - os: ubuntu-16.04
-          arch: x86
+          arch: x86_64
         - os: macos-latest
-          arch: x86
+          arch: x86_64
     steps:
     - uses: actions/checkout@v1
       with:
         ref: refs/heads/master
         submodules : recursive
     - uses: actboy168/setup-luamake@master
-      with:
-        arch: ${{ matrix.arch }}
-    - run: luamake
+    - run: luamake -arch ${{ matrix.arch }}
     - uses: actions/upload-artifact@v1.0.0
       with:
         name: lua-debug
@@ -34,7 +34,7 @@ jobs:
       - uses: actions/download-artifact@v1.0.0
         with:
           name: lua-debug
-      - run: chmod -v +x lua-debug/runtime/[^w]*/lua5*/lua
+      - run: chmod -v +x lua-debug/runtime/[^w]*/[^w]*/lua*/lua
       - run: chmod -v +x lua-debug/bin/[^w]*/lua-debug
       - run: cd lua-debug && vsce publish -p ${{ secrets.VSCE_KEY }}
         continue-on-error: true

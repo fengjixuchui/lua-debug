@@ -18,7 +18,6 @@ local initialized = false
 local info = {}
 local state = 'running'
 local stopReason = 'step'
-local exceptionFilters = {}
 local currentException = {
     message = '',
     trace = '',
@@ -33,8 +32,8 @@ local baseL
 
 local CMD = {}
 
-local WorkerId = tostring(hookmgr.gethost())
-local WorkerChannel = ('DbgWorker(%s)'):format(WorkerId)
+local WorkerIdent = tostring(hookmgr.gethost())
+local WorkerChannel = ('DbgWorker(%s)'):format(WorkerIdent)
 
 thread.newchannel (WorkerChannel)
 local masterThread = thread.channel 'DbgMaster'
@@ -59,35 +58,25 @@ local function workerThreadUpdate(timeout)
     end
 end
 
-local function sendToMaster(msg)
-	masterThread:push(WorkerId, assert(json.encode(msg)))
+local function sendToMaster(cmd)
+    return function (pkg)
+        masterThread:push(WorkerIdent, cmd, json.encode(pkg))
+    end
 end
 
 ev.on('breakpoint', function(reason, bp)
-    sendToMaster {
-        cmd = 'eventBreakpoint',
+    sendToMaster 'eventBreakpoint' {
         reason = reason,
         breakpoint = bp,
     }
 end)
 
-ev.on('output', function(category, output, source, line)
-    sendToMaster {
-        cmd = 'eventOutput',
-        category = category,
-        output = output,
-        source = source and {
-            name = source.name,
-            path = source.path,
-            sourceReference = source.sourceReference,
-        } or nil,
-        line = line,
-    }
+ev.on('output', function(body)
+    sendToMaster 'eventOutput' (body)
 end)
 
 ev.on('loadedSource', function(reason, s)
-    sendToMaster {
-        cmd = 'loadedSource',
+    sendToMaster 'eventLoadedSource' {
         reason = reason,
         source = source.output(s)
     }
@@ -99,7 +88,10 @@ end)
 --    for i = 1, n do
 --        t[i] = tostring(select(i, ...))
 --    end
---    ev.emit('output', 'stderr', table.concat(t, '\t')..'\n')
+--    ev.emit('output', {
+--        category = 'stderr',
+--        output = table.concat(t, '\t')..'\n',
+--    })
 --end
 
 --local log = require 'common.log'
@@ -117,21 +109,18 @@ end
 
 function CMD.initialized()
     initialized = true
+    sendToMaster 'eventThread' {
+        reason = 'started',
+    }
 end
 
-function CMD.terminated()
+function CMD.disconnect()
     if initialized then
         initialized = false
         state = 'running'
         ev.emit('terminated')
-    end
-end
-
-function CMD.exit()
-    if initialized then
-        CMD.terminated()
-        sendToMaster {
-            cmd = 'exitThread',
+        sendToMaster 'eventThread' {
+            reason = 'exited'
         }
     end
 end
@@ -255,19 +244,19 @@ function CMD.stackTrace(pkg)
     until (not L or levels <= 0)
     hookmgr.sethost(baseL)
 
-    sendToMaster {
-        cmd = 'stackTrace',
+    sendToMaster 'stackTrace' {
         command = pkg.command,
         seq = pkg.seq,
         success = true,
-        stackFrames = res,
-        totalFrames = 0x10000,
+        body = {
+            stackFrames = res,
+            totalFrames = 0x10000,
+        }
     }
 end
 
 function CMD.source(pkg)
-    sendToMaster {
-        cmd = 'source',
+    sendToMaster 'source' {
         command = pkg.command,
         seq = pkg.seq,
         content = source.getCode(pkg.sourceReference),
@@ -289,19 +278,19 @@ function CMD.scopes(pkg)
     local coid = (pkg.frameId >> 16) + 1
     local depth = pkg.frameId & 0xFFFF
     hookmgr.sethost(assert(findFrame(coid)))
-    sendToMaster {
-        cmd = 'scopes',
+    sendToMaster 'scopes' {
         command = pkg.command,
         seq = pkg.seq,
-        scopes = variables.scopes(depth),
+        body = {
+            scopes = variables.scopes(depth)
+        }
     }
 end
 
 function CMD.variables(pkg)
     local vars, err = variables.extand(pkg.valueId, pkg.filter, pkg.start, pkg.count)
     if not vars then
-        sendToMaster {
-            cmd = 'variables',
+        sendToMaster 'variables' {
             command = pkg.command,
             seq = pkg.seq,
             success = false,
@@ -309,20 +298,20 @@ function CMD.variables(pkg)
         }
         return
     end
-    sendToMaster {
-        cmd = 'variables',
+    sendToMaster 'variables' {
         command = pkg.command,
         seq = pkg.seq,
         success = true,
-        variables = vars,
+        body = {
+            variables = vars
+        }
     }
 end
 
 function CMD.setVariable(pkg)
     local var, err = variables.set(pkg.valueId, pkg.name, pkg.value)
     if not var then
-        sendToMaster {
-            cmd = 'setVariable',
+        sendToMaster 'setVariable' {
             command = pkg.command,
             seq = pkg.seq,
             success = false,
@@ -330,13 +319,14 @@ function CMD.setVariable(pkg)
         }
         return
     end
-    sendToMaster {
-        cmd = 'setVariable',
+    sendToMaster 'setVariable' {
         command = pkg.command,
         seq = pkg.seq,
         success = true,
-        value = var.value,
-        type = var.type,
+        body = {
+            value = var.value,
+            type = var.type,
+        }
     }
 end
 
@@ -344,8 +334,7 @@ function CMD.evaluate(pkg)
     local depth = pkg.frameId & 0xFFFF
     local ok, result = evaluate.run(depth, pkg.expression, pkg.context)
     if not ok then
-        sendToMaster {
-            cmd = 'evaluate',
+        sendToMaster 'evaluate' {
             command = pkg.command,
             seq = pkg.seq,
             success = false,
@@ -353,8 +342,7 @@ function CMD.evaluate(pkg)
         }
         return
     end
-    sendToMaster {
-        cmd = 'evaluate',
+    sendToMaster 'evaluate' {
         command = pkg.command,
         seq = pkg.seq,
         success = true,
@@ -374,31 +362,19 @@ function CMD.setFunctionBreakpoints(pkg)
 end
 
 function CMD.setExceptionBreakpoints(pkg)
-    exceptionFilters = {}
-    for _, filter in ipairs(pkg.arguments.filters) do
-        exceptionFilters[filter] = true
-    end
-    for _, filter in ipairs(pkg.arguments.filterOptions) do
-        if type(filter.condition) == "string" and evaluate.verify(filter.condition) then
-            exceptionFilters[filter.filterId] = filter.condition
-        else
-            exceptionFilters[filter.filterId] = true
-        end
-    end
-    if hookmgr.exception_open then
-        hookmgr.exception_open(next(exceptionFilters) ~= nil)
-    end
+    breakpoint.setExceptionBreakpoints(pkg.arguments)
 end
 
 function CMD.exceptionInfo(pkg)
-    sendToMaster {
-        cmd = 'exceptionInfo',
+    sendToMaster 'exceptionInfo' {
         command = pkg.command,
         seq = pkg.seq,
-        breakMode = 'always',
-        exceptionId = currentException.message,
-        details = {
-            stackTrace = currentException.trace,
+        body = {
+            breakMode = 'always',
+            exceptionId = currentException.message,
+            details = {
+                stackTrace = currentException.trace,
+            }
         }
     }
 end
@@ -447,8 +423,7 @@ end
 
 function CMD.restartFrame()
     cleanFrame()
-    sendToMaster {
-        cmd = 'eventStop',
+    sendToMaster 'eventStop' {
         reason = 'restart',
     }
 end
@@ -481,28 +456,22 @@ end
 
 function CMD.customRequestShowIntegerAsDec()
     variables.showIntegerAsDec()
-    sendToMaster {
-        cmd = "eventInvalidated",
+    sendToMaster 'eventInvalidated' {
         areas = "variables",
     }
 end
 
 function CMD.customRequestShowIntegerAsHex()
     variables.showIntegerAsHex()
-    sendToMaster {
-        cmd = "eventInvalidated",
+    sendToMaster 'eventInvalidated' {
         areas = "variables",
     }
 end
 
-local function runLoop(reason, text, level)
+local function runLoop(reason, level)
     baseL = hookmgr.gethost()
     --TODO: 只在lua栈帧时需要text？
-    sendToMaster {
-        cmd = 'eventStop',
-        reason = reason,
-        text = text,
-    }
+    sendToMaster 'eventStop' (reason)
     skipFrame = level or 0
 
     while true do
@@ -520,13 +489,14 @@ local function event_breakpoint(src, line)
         hookmgr.break_closeline()
         return
     end
-    local bp = breakpoint.find(src, source.line(src, line))
+    local bp = breakpoint.hit_bp(src, source.line(src, line))
     if bp then
-        if breakpoint.exec(bp) then
-            state = 'stopped'
-            runLoop 'breakpoint'
-            return true
-        end
+        state = 'stopped'
+        runLoop {
+            reason = 'breakpoint',
+            hitBreakpointIds = {bp.id}
+        }
+        return true
     end
 end
 
@@ -539,9 +509,13 @@ end
 
 function event.funcbp(func)
     if not initialized then return end
-    if breakpoint.hit_funcbp(func) then
+    local bp = breakpoint.hit_funcbp(func)
+    if bp then
         state = 'stopped'
-        runLoop 'function breakpoint'
+        runLoop {
+            reason = 'function breakpoint',
+            hitBreakpointIds = {bp.id}
+        }
     end
 end
 
@@ -564,7 +538,9 @@ function event.step(line)
         hookmgr.step_cancel()
     end
     if state == 'stopped' then
-        runLoop(stopReason)
+        runLoop {
+            reason = stopReason
+        }
     end
 end
 
@@ -607,12 +583,7 @@ function event.print()
     end
     res = table.concat(res, '\t') .. '\n'
     rdebug.getinfo(1, "Sl", info)
-    local src = source.create(info.source)
-    if source.valid(src) then
-        stdout(res, src, source.line(src, info.currentline))
-    else
-        stdout(res)
-    end
+    stdout(res, info)
     return true
 end
 
@@ -624,28 +595,54 @@ function event.iowrite()
     end
     res = table.concat(res, '\t')
     rdebug.getinfo(1, "Sl", info)
-    local src = source.create(info.source)
-    if source.valid(src) then
-        stdout(res, src, source.line(src, info.currentline))
-    else
-        stdout(res)
-    end
+    stdout(res, info)
     return true
 end
 
-local function execExceptionBreakpoint(type, level, error)
-    local filter = exceptionFilters[type]
-    if filter == true or filter == nil then
-        return filter
-    end
-    local ok, res = evaluate.eval(filter, level, { error = error })
-    return ok and res
+local ERREVENT_ERRRUN    <const> = 0x02
+local ERREVENT_ERRSYNTAX <const> = 0x03
+local ERREVENT_ERRMEM    <const> = 0x04
+local ERREVENT_ERRERR    <const> = 0x05
+local ERREVENT_PANIC     <const> = 0x10
+
+local function GlobalFunction(name)
+    return rdebug.value(rdebug.fieldv(rdebug._G, name))
 end
 
-local function getExceptionType()
-    local pcall = rdebug.value(rdebug.fieldv(rdebug._G, 'pcall'))
-    local xpcall = rdebug.value(rdebug.fieldv(rdebug._G, 'xpcall'))
-    local level = 1
+local function getExceptionType(errcode)
+    errcode = errcode & 0xF
+    if errcode == ERREVENT_ERRRUN then
+        if rdebug.getinfo(0, "Sl", info) then
+            if info.what ~= 'C' then
+                return "runtime"
+            end
+            local raisefunc = rdebug.value(rdebug.getfunc(0))
+            if raisefunc == GlobalFunction "assert" then
+                return "assert"
+            end
+            if raisefunc == GlobalFunction "error" then
+                return "error"
+            end
+        end
+        return "other"
+    elseif errcode == ERREVENT_ERRSYNTAX then
+        return "syntax"
+    elseif errcode == ERREVENT_ERRMEM then
+        return "unknown"
+    elseif errcode == ERREVENT_ERRERR then
+        return "unknown"
+    else
+        return "unknown"
+    end
+end
+
+local function getExceptionCaught(errcode)
+    if errcode & ERREVENT_PANIC ~= 0 then
+        return "panic"
+    end
+    local pcall = GlobalFunction 'pcall'
+    local xpcall = GlobalFunction 'xpcall'
+    local level = 0
     while true do
         local f = rdebug.getfunc(level)
         if f == nil then
@@ -663,9 +660,20 @@ local function getExceptionType()
     return 'native'
 end
 
-local function runException(type, error)
+local function getExceptionFlags(errcode)
+    return {
+        getExceptionType(errcode),
+        getExceptionCaught(errcode),
+    }
+end
+
+local function runException(flags, error)
     local level, message, trace = traceback(error)
-    if level < 0 or not execExceptionBreakpoint(type, level, error) then
+    if level < 0 then
+        return
+    end
+    local bp = breakpoint.hitExceptionBreakpoint(flags, level, error)
+    if not bp then
         return
     end
     currentException = {
@@ -673,17 +681,20 @@ local function runException(type, error)
         trace = trace,
     }
     state = 'stopped'
-    runLoop('exception', message, level)
+    runLoop({
+        reason = 'exception',
+        hitBreakpointIds = {bp.id},
+        text = message,
+    }, level)
 end
 
-function event.panic(error)
+function event.exception(error, errcode)
     if not initialized then return end
-    runException('panic', error)
-end
-
-function event.exception(error)
-    if not initialized then return end
-    runException(getExceptionType(), error)
+    if errcode == nil or errcode == -1 then
+        --TODO:暂时兼容旧版本
+        errcode = ERREVENT_ERRRUN
+    end
+    runException(getExceptionFlags(errcode), error)
 end
 
 function event.thread(co, type)
@@ -704,8 +715,12 @@ function event.wait()
     end
 end
 
+function event.setThreadName(name)
+    sendToMaster 'setThreadName' (name)
+end
+
 function event.exit()
-    CMD.exit()
+    sendToMaster 'exitWorker' {}
 end
 
 hookmgr.init(function(name, ...)
@@ -754,8 +769,6 @@ ev.on('terminated', function()
     end
 end)
 
-sendToMaster {
-    cmd = 'startThread',
-}
+sendToMaster 'initWorker' {}
 
 hookmgr.update_open(true)

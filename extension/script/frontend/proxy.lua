@@ -1,20 +1,25 @@
 local network = require 'common.network'
-local debuggerFactory = require 'frontend.debugerFactory'
+local debuger_factory = require 'frontend.debuger_factory'
 local fs = require 'bee.filesystem'
 local sp = require 'bee.subprocess'
-local platformOS = require 'frontend.platformOS'
-local inject = require 'inject'
+local platform_os = require 'frontend.platform_os'
 local server
 local client
 local initReq
-local startReq
-local restart = false
 local m = {}
 
 local function getUnixAddress(pid)
     local path = WORKDIR / "tmp"
     fs.create_directories(path)
     return "@"..(path / ("pid_%d"):format(pid)):string()
+end
+
+local function ipc_send_latest(pid)
+    fs.create_directories(WORKDIR / "tmp")
+    local ipc = require "common.ipc"
+    local fd = assert(ipc(WORKDIR, pid, "luaVersion", "w"))
+    fd:write("latest")
+    fd:close()
 end
 
 local function response_initialize(req)
@@ -60,15 +65,12 @@ end
 
 local function attach_process(pkg, pid)
     if pkg.args.luaVersion == "latest" then
-        fs.create_directories(WORKDIR / "tmp")
-        local ipc = require "common.ipc"
-        local fd = assert(ipc(WORKDIR, pid, "luaVersion", "w"))
-        fd:write("latest")
-        fd:close()
+        ipc_send_latest(pid)
     end
+    local inject = require 'inject'
     if not inject.injectdll(pid
-        , (WORKDIR / "bin" / "win" / "launcher.x86.dll"):string()
-        , (WORKDIR / "bin" / "win" / "launcher.x64.dll"):string()
+        , (WORKDIR / "bin" / "windows" / "launcher.x86.dll"):string()
+        , (WORKDIR / "bin" / "windows" / "launcher.x64.dll"):string()
         , "attach"
     ) then
         return false
@@ -87,8 +89,8 @@ end
 
 local function proxy_attach(pkg)
     local args = pkg.arguments
-    platformOS.init(args)
-    if platformOS() ~= "Windows" then
+    platform_os.init(args)
+    if platform_os() ~= "Windows" then
         attach_tcp(pkg, args)
         return
     end
@@ -125,7 +127,7 @@ local function proxy_launch_terminal(pkg)
     end
     local pid = sp.get_id()
     server = network(getUnixAddress(pid), true)
-    local arguments, err = debuggerFactory.create_luaexe_in_terminal(args, WORKDIR, pid)
+    local arguments, err = debuger_factory.create_luaexe_in_terminal(args, WORKDIR, pid)
     if not arguments then
         response_error(pkg, err)
         return
@@ -137,20 +139,25 @@ end
 local function proxy_launch_console(pkg)
     local args = pkg.arguments
     if args.runtimeExecutable then
-        if platformOS() ~= "Windows" then
+        if platform_os() ~= "Windows" then
             response_error(pkg, "`runtimeExecutable` is not supported.")
             return
         end
-        local process, err = debuggerFactory.create_process_in_console(args)
+        local process, err = debuger_factory.create_process_in_console(args, function (process)
+            local pid = process:get_id()
+            server = network(getUnixAddress(pid), true)
+            if args.luaVersion == "latest" then
+                ipc_send_latest(pid)
+            end
+        end)
         if not process then
             response_error(pkg, err)
             return
         end
-        server = network(getUnixAddress(process:get_id()), true)
     else
         local pid = sp.get_id()
         server = network(getUnixAddress(pid), true)
-        local ok, err = debuggerFactory.create_luaexe_in_console(args, WORKDIR, pid)
+        local ok, err = debuger_factory.create_luaexe_in_console(args, WORKDIR, pid)
         if not ok then
             response_error(pkg, err)
             return
@@ -161,7 +168,7 @@ end
 
 local function proxy_launch(pkg)
     local args = pkg.arguments
-    platformOS.init(args)
+    platform_os.init(args)
     if args.console == 'integratedTerminal' or args.console == 'externalTerminal' then
         if not proxy_launch_terminal(pkg) then
             return
@@ -176,9 +183,9 @@ local function proxy_launch(pkg)
 end
 
 local function proxy_start(pkg)
-    if pkg.command == 'attach' then
+    if pkg.arguments.request == 'attach' then
         proxy_attach(pkg)
-    elseif pkg.command == 'launch' then
+    elseif pkg.arguments.request == 'launch' then
         proxy_launch(pkg)
     end
 end
@@ -186,19 +193,6 @@ end
 function m.send(pkg)
     if server then
         if pkg.type == 'response' and pkg.command == 'runInTerminal' then
-            return
-        end
-        if pkg.type == 'request' and pkg.command == 'restart' then
-            response_restart(pkg)
-            server.sendmsg {
-                type = 'request',
-                seq = 0,
-                command = 'terminate',
-                arguments = {
-                    restart = true,
-                }
-            }
-            restart = true
             return
         end
         server.sendmsg(pkg)
@@ -213,7 +207,6 @@ function m.send(pkg)
     else
         if pkg.type == 'request' then
             if pkg.command == 'attach' or pkg.command == 'launch' then
-                startReq = pkg
                 proxy_start(pkg)
             else
                 response_error(pkg, 'error request')
@@ -225,11 +218,6 @@ end
 function m.update()
     if server then
         server.event_close(function()
-            if restart then
-                restart = false
-                proxy_start(startReq)
-                return
-            end
             os.exit(0, true)
         end)
         while true do

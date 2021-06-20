@@ -12,10 +12,13 @@ local initialized = false
 local stat = {}
 local queue = {}
 local masterThread
-local workers = {}
 local client = {}
 local maxThreadId = 0
-local threads = {}
+local threadChannel = {}
+local threadCatalog = {}
+local threadStatus = {}
+local threadName = {}
+local terminateDebuggeeCallback
 
 local function genThreadId()
     maxThreadId = maxThreadId + 1
@@ -100,61 +103,123 @@ function mgr.sendToClient(pkg)
 end
 
 function mgr.sendToWorker(w, pkg)
-    return workers[w]:push(assert(json.encode(pkg)))
+    return threadChannel[w]:push(json.encode(pkg))
 end
 
 function mgr.broadcastToWorker(pkg)
-    local msg = assert(json.encode(pkg))
-    for _, channel in pairs(workers) do
+    local msg = json.encode(pkg)
+    for _, channel in pairs(threadChannel) do
         channel:push(msg)
     end
 end
 
+function mgr.setThreadName(w, name)
+    if name == json.null then
+        threadName[w] = nil
+    else
+        threadName[w] = name
+    end
+end
+
 function mgr.workers()
-    return workers
+    return threadChannel
+end
+
+function mgr.threads()
+    local t = {}
+    for threadId, status in pairs(threadStatus) do
+        if status == "connect" then
+            t[#t + 1] = {
+                name = (threadName[threadId] or "Thread (${id})"):gsub("%$%{([^}]*)%}", {
+                    id = threadId
+                }),
+                id = threadId,
+            }
+        end
+    end
+    table.sort(t, function (a, b)
+        return a.name < b.name
+    end)
+    return t
 end
 
 function mgr.hasThread(w)
-    return workers[w] ~= nil
+    return threadChannel[w] ~= nil
 end
 
-function mgr.startThread(workerId)
-    local workerChannel = ('DbgWorker(%s)'):format(workerId)
-    local threaId = genThreadId()
-    workers[threaId] = assert(thread.channel(workerChannel))
-    threads[workerId] = threaId
-    ev.emit('worker-ready', threaId)
-    return threaId
+function mgr.initWorker(WorkerIdent)
+    local workerChannel = ('DbgWorker(%s)'):format(WorkerIdent)
+    local threadId = genThreadId()
+    threadChannel[threadId] = assert(thread.channel(workerChannel))
+    threadCatalog[WorkerIdent] = threadId
+    threadStatus[threadId] = "disconnect"
+    threadName[threadId] = nil
+    ev.emit('worker-ready', threadId)
 end
 
-function mgr.exitThread(w)
-    workers[w] = nil
+function mgr.setThreadStatus(threadId, status)
+    threadStatus[threadId] = status
+    if terminateDebuggeeCallback and status == "disconnect" then
+        for _, s in pairs(threadStatus) do
+            if s == "connect" then
+                return
+            end
+        end
+        terminateDebuggeeCallback()
+    end
+end
+
+function mgr.setTerminateDebuggeeCallback(callback)
+    for _, s in pairs(threadStatus) do
+        if s == "connect" then
+            terminateDebuggeeCallback = callback
+            return
+        end
+    end
+    callback()
+end
+
+function mgr.exitWorker(w)
+    threadChannel[w] = nil
+    for WorkerIdent, threadId in pairs(threadCatalog) do
+        if threadId == w then
+            threadCatalog[WorkerIdent] = nil
+        end
+    end
+    threadStatus[w] = nil
+    threadName[w] = nil
 end
 
 local function updateOnce()
     local threadCMD = require 'backend.master.threads'
     while true do
-        local ok, w, msg = masterThread:pop()
+        local ok, w, cmd, msg = masterThread:pop()
         if not ok then
             break
         end
-        local pkg = assert(json.decode(msg))
-        if threadCMD[pkg.cmd] then
-            threadCMD[pkg.cmd](threads[w] or w, pkg)
+        if threadCMD[cmd] then
+            local pkg = json.decode(msg)
+            threadCMD[cmd](threadCatalog[w] or w, pkg)
         end
     end
     if redirect.stderr then
         local res = redirect.stderr:read(redirect.stderr:peek())
         if res then
             local event = require 'backend.master.event'
-            event.output('stderr', res)
+            event.output {
+                category = 'stderr',
+                output = res,
+            }
         end
     end
     if redirect.stdout then
         local res = redirect.stdout:read(redirect.stdout:peek())
         if res then
             local event = require 'backend.master.event'
-            event.output('stdout', res)
+            event.output {
+                category = 'stdout',
+                output = res,
+            }
         end
     end
     if not network.update() then

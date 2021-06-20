@@ -300,30 +300,8 @@ struct hookmgr {
     //
     int exception_mask = 0;
 #if defined(LUA_HOOKEXCEPTION)
-    lua_CFunction oldpanic = 0;
-    std::unique_ptr<thunk> sc_panic;
-
-    void exception_enable(lua_State* hL) {
-        oldpanic = lua_atpanic(hostL, 0);
-        sc_panic.reset(thunk_create_panic(
-            reinterpret_cast<intptr_t>(this),
-            reinterpret_cast<intptr_t>(&panic_callback)
-        ));
-        lua_atpanic(hostL, (lua_CFunction)sc_panic->data);
-    }
-
-    void exception_disable(lua_State* hL) {
-        lua_atpanic(hL, oldpanic);
-    }
-
     void exception_hookmask(lua_State* hL, int mask) {
         if (exception_mask != mask) {
-            if (!exception_mask) {
-                exception_enable(hL);
-            }
-            else {
-                exception_disable(hL);
-            }
             exception_mask = mask;
             updatehookmask(hL);
         }
@@ -338,8 +316,14 @@ struct hookmgr {
         }
         set_host(cL, hL);
         rlua_pushstring(cL, "exception");
+#if LUA_VERSION_NUM >= 504
+        if (ar->i_ci->u2.transferinfo.ntransfer == 1) {
+            hL->top = hL->stack + ar->i_ci->u2.transferinfo.ftransfer;
+        }
+#endif
         int ref = copy_value(hL, cL, true);
-        if (rlua_pcall(cL, 2, 0, 0) != LUA_OK) {
+        rlua_pushinteger(cL, ar->currentline);
+        if (rlua_pcall(cL, 3, 0, 0) != LUA_OK) {
             rlua_pop(cL, 1);
         }
         unref_value(hL, ref);
@@ -429,24 +413,6 @@ struct hookmgr {
             unref_value(hL, refs[i]);
         }
         return nres;
-    }
-
-    void panic(lua_State* hL) {
-        if (rlua_rawgetp(cL, RLUA_REGISTRYINDEX, &HOOK_CALLBACK) == LUA_TFUNCTION) {
-            set_host(cL, hL);
-            rlua_pushstring(cL, "panic");
-            int ref = copy_value(hL, cL, true);
-            if (rlua_pcall(cL, 2, 0, 0) != LUA_OK) {
-                rlua_pop(cL, 1);
-            }
-            unref_value(hL, ref);
-        }
-        else {
-            rlua_pop(cL, 1);
-        }
-        if (oldpanic) {
-            oldpanic(hL);
-        }
     }
 
     void full_hook(lua_State* hL, lua_Debug* ar) {
@@ -550,22 +516,41 @@ struct hookmgr {
         }
     }
 
+    lua_State* getmainthread(lua_State* L) {
+#if !defined(RDEBUG_FAST) && LUA_VERSION_NUM >= 502
+        lua_rawgeti(L,  LUA_REGISTRYINDEX, LUA_RIDX_MAINTHREAD);
+        lua_State* mL = lua_tothread(L, -1);
+        lua_pop(L, 1);
+        return mL;
+#else
+        return L->l_G->mainthread;
+#endif
+    }
+
+    void sethook(lua_State* L, lua_Hook func, int mask, int count) {
+        lua_sethook(L, func, mask, count);
+        lua_State* mainL = getmainthread(L);
+        if (mainL != L) {
+            lua_sethook(mainL, func, mask, count);
+        }
+    }
+
     void updatehookmask(lua_State* hL) {
         int mask = break_mask | funcbp_mask;
         if (!stepL || stepL == hL) {
             mask |= step_mask;
         }
         if (mask) {
-            lua_sethook(hL, (lua_Hook)sc_full_hook->data, mask | exception_mask | thread_mask, 0);
+            sethook(hL, (lua_Hook)sc_full_hook->data, mask | exception_mask, 0);
         }
         else if (update_mask) {
-            lua_sethook(hL, (lua_Hook)sc_idle_hook->data, update_mask | exception_mask | thread_mask, 0xfffff);
+            sethook(hL, (lua_Hook)sc_idle_hook->data, update_mask | exception_mask, 0xfffff);
         }
-        else if (exception_mask | thread_mask) {
-            lua_sethook(hL, (lua_Hook)sc_idle_hook->data, exception_mask | thread_mask, 0);
+        else if (exception_mask) {
+            sethook(hL, (lua_Hook)sc_idle_hook->data, exception_mask, 0);
         }
         else {
-            lua_sethook(hL, 0, 0, 0);
+            sethook(hL, 0, 0, 0);
         }
     }
     
@@ -636,9 +621,6 @@ struct hookmgr {
     static void idle_hook_callback(hookmgr* mgr, lua_State* hL, lua_Debug* ar) {
         mgr->idle_hook(hL, ar);
     }
-    static void panic_callback(hookmgr* mgr, lua_State* hL) {
-        mgr->panic(hL);
-    }
 #else
     static int full_hook_callback(lua_State* hL, lua_Debug* ar) {
         hookmgr* mgr = (hookmgr*)thunk_get(hL, &THUNK_MGR);
@@ -648,11 +630,6 @@ struct hookmgr {
     static int idle_hook_callback(lua_State* hL, lua_Debug* ar) {
         hookmgr* mgr = (hookmgr*)thunk_get(hL, &THUNK_MGR);
         mgr->idle_hook(hL, ar);
-        return 0;
-    }
-    static int panic_callback(lua_State* hL) {
-        hookmgr* mgr = (hookmgr*)thunk_get(hL, &THUNK_MGR);
-        mgr->panic(hL);
         return 0;
     }
 #endif
